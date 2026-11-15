@@ -100,4 +100,70 @@ k6 version
 
 Сборка создаёт `gateway/target/gateway-0.0.1-SNAPSHOT.jar`, `checkout/target/checkout-0.0.1-SNAPSHOT.jar` и `inventory/target/inventory-0.0.1-SNAPSHOT.jar`. Для сборки одного приложения можно выполнить `.\mvnw.cmd -pl gateway -am verify` из корня (аналогично для `checkout` и `inventory`). Перенесён существующий тест загрузки контекста Gateway; отдельных тестов Checkout и Inventory пока нет.
 
-Команды совместного запуска, примеры запросов и воспроизведения эксперимента будут добавлены по мере готовности соответствующих частей.
+## Запуск и проверка приложений
+
+После сборки откройте три отдельных терминала PowerShell в корне репозитория и выполните по одной команде в каждом:
+
+```powershell
+java -jar gateway/target/gateway-0.0.1-SNAPSHOT.jar
+```
+
+```powershell
+java -jar checkout/target/checkout-0.0.1-SNAPSHOT.jar
+```
+
+```powershell
+java -jar inventory/target/inventory-0.0.1-SNAPSHOT.jar
+```
+
+| Приложение | Порт по умолчанию | Переменная окружения для порта |
+|---|---:|---|
+| Gateway | 8080 | GATEWAY_PORT |
+| Checkout | 8081 | CHECKOUT_PORT |
+| Inventory | 8082 | INVENTORY_PORT |
+
+В четвёртом терминале проверьте готовность:
+
+```powershell
+curl.exe --fail --silent --show-error http://localhost:8080/actuator/health/readiness
+curl.exe --fail --silent --show-error http://localhost:8081/actuator/health/readiness
+curl.exe --fail --silent --show-error http://localhost:8082/actuator/health/readiness
+```
+
+Ожидается HTTP 200 и JSON `{"status":"UP"}`. На тех же портах доступны `/actuator/health` и `/actuator/health/liveness`. Readiness отражает готовность самого процесса; доступность соседних приложений и выполнение бизнес-запроса в неё не входят. По HTTP опубликован только health, детали скрыты. Чтобы остановить приложение, нажмите Ctrl+C в его терминале.
+
+Пример смены порта Inventory перед запуском:
+
+```powershell
+$env:INVENTORY_PORT = '18082'
+java -jar inventory/target/inventory-0.0.1-SNAPSHOT.jar
+# После остановки приложения:
+Remove-Item Env:INVENTORY_PORT
+```
+
+Для будущих исходящих запросов подготовлены параметры:
+
+| Где | Свойство | Переменная окружения | Значение по умолчанию |
+|---|---|---|---|
+| Gateway | upstream.checkout.base-url | CHECKOUT_BASE_URL | http://localhost:8081 |
+| Gateway и Checkout | upstream.inventory.base-url | INVENTORY_BASE_URL | http://localhost:8082 |
+
+Параметры адресов пока не используются HTTP-клиентами: сами маршруты будут добавлены следующим шагом. При смене порта сервиса его адрес у вызывающего приложения нужно менять отдельно.
+
+## Автоматическая проверка запуска на Windows
+
+Остановите запущенные вручную приложения, чтобы освободить порты. Из корня выполните:
+
+```powershell
+.\scripts\smoke-health.ps1
+```
+
+Скрипт проверяет свободные порты, запускает собранные JAR, ожидает readiness с ограничением времени, проверяет три health endpoint и закрытость `/actuator/env`. Затем останавливает Inventory и проверяет независимость readiness оставшихся приложений. В конце, в том числе при ошибке, завершает созданные им процессы. Полная сборка перед этой проверкой выполняется командой `.\mvnw.cmd clean verify`.
+
+Переопределение портов для проверки:
+
+```powershell
+.\scripts\smoke-health.ps1 -GatewayPort 18080 -CheckoutPort 18081 -InventoryPort 18082
+```
+
+Оба набора портов проверены успешно. Логи каждого запуска сохраняются в `target/health-smoke/<идентификатор>/` и исключены из Git. Проверка относится к запуску и health; измерений производительности пока нет.
