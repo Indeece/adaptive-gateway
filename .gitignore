@@ -1,5 +1,5 @@
 HELP.md
-# Keep only the root README under version control.
+# В Git хранится только корневой README.
 *.[mM][dD]
 !/README.md
 AGENTS.md
