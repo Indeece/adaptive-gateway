@@ -1,10 +1,10 @@
-package ru.indeece.adaptivegateway;
+package ru.indeece.gateway;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @SpringBootTest
-class AdaptiveGatewayApplicationTests {
+class GatewayApplicationTests {
 
     @Test
     void contextLoads() {

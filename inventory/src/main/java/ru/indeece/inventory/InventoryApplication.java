@@ -1,13 +1,12 @@
-package ru.indeece.adaptivegateway;
+package ru.indeece.inventory;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class AdaptiveGatewayApplication {
+public class InventoryApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(AdaptiveGatewayApplication.class, args);
+        SpringApplication.run(InventoryApplication.class, args);
     }
-
 }

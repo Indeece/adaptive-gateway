@@ -64,7 +64,7 @@ flowchart TD
 
 Java 21, Spring Boot MVC 4.1.2 и Maven Wrapper с Maven 3.10.0. Совместимость версий описана в [требованиях Spring Boot](https://docs.spring.io/spring-boot/system-requirements.html) и [требованиях Maven](https://maven.apache.org/docs/3.10.0/release-notes.html).
 
-Для исходящих запросов выбран синхронный `RestClient` с Apache HttpClient 5; точную версию клиента задаёт BOM Spring Boot. MVC соответствует последовательному HTTP-пути стенда. Apache позволяет явно ограничивать пул и отдельно задавать ожидание соединения из пула, установление соединения и чтение ответа. См. [адаптер Spring для Apache HttpClient](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/http/client/HttpComponentsClientHttpRequestFactory.html).
+Для исходящих запросов выбран синхронный `RestClient` с Apache HttpClient 5.6.5; версию клиента задаёт BOM Spring Boot 4.1.2. В собранных приложениях используется Spring Framework 7.0.10. MVC соответствует последовательному HTTP-пути стенда. Apache позволяет явно ограничивать пул и отдельно задавать ожидание соединения из пула, установление соединения и чтение ответа. См. [адаптер Spring для Apache HttpClient](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/http/client/HttpComponentsClientHttpRequestFactory.html).
 
 Зависимости клиента подключены; при реализации маршрутов предстоит задать конечные таймауты и отключить автоматические повторы и перенаправления. Таймаут чтения не равен общему дедлайну вызова: зависания и чтение тела будут проверены отдельно.
 
@@ -74,15 +74,30 @@ Java 21, Spring Boot MVC 4.1.2 и Maven Wrapper с Maven 3.10.0. Совмест�
 
 ## Текущее состояние
 
-Подготовлены постановка исследования и структура работы. В коде пока есть только начальное Spring Boot MVC-приложение. Три сервиса, маршруты, общий пул, B0/B1/B2 и экспериментальные сценарии ещё предстоит реализовать. Результатов сравнения пока нет.
+Подготовлены постановка исследования и Maven-сборка трёх приложений. Корневой POM объединяет модули, каждый из которых содержит собственную точку входа и собирается в отдельный исполняемый JAR. Зависимостей между кодом сервисов нет.
 
-На первом этапе проверены версии локальных инструментов: Java 21.0.2, Maven Wrapper с Maven 3.10.0, Docker Compose 2.40.0-desktop.1, k6 2.4.0 и Python 3.13.17. Это проверка доступности инструментов; совместимость зависимостей сборкой и работоспособность стенда пока не подтверждены. При проверке Docker CLI не смог подключиться к локальному Engine.
+```text
+adaptive-gateway/
+├── pom.xml
+├── gateway/       # приём внешних запросов и будущий контроль допуска
+├── checkout/      # будущий пакетный вызов Inventory
+└── inventory/     # будущий общий ограниченный ресурс
+```
 
-Для проверки Java и Maven Wrapper в PowerShell из корня проекта:
+Маршруты, общий пул, B0/B1/B2 и нагрузочные сценарии предстоит реализовать. Порты трёх процессов и health ещё не настроены; совместный запуск будет проверен на следующем этапе. Результатов сравнения пока нет.
+
+Проверены Java 21.0.2, Maven Wrapper с Maven 3.10.0, Docker Engine 28.5.1 (Linux), Docker Compose 2.40.0-desktop.1, k6 2.4.0 и Python 3.13.17. После запуска Docker Desktop Engine доступен. Контейнеры проекта ещё не создавались.
+
+Проверка окружения и сборка из корня проекта в PowerShell:
 
 ```powershell
 java -version
 .\mvnw.cmd -v
+docker info
+k6 version
+.\mvnw.cmd clean verify
 ```
 
-Команды сборки и запуска стенда, примеры запросов и воспроизведения эксперимента будут добавляться по мере готовности соответствующих частей.
+Сборка создаёт `gateway/target/gateway-0.0.1-SNAPSHOT.jar`, `checkout/target/checkout-0.0.1-SNAPSHOT.jar` и `inventory/target/inventory-0.0.1-SNAPSHOT.jar`. Для сборки одного приложения можно выполнить `.\mvnw.cmd -pl gateway -am verify` из корня (аналогично для `checkout` и `inventory`). Перенесён существующий тест загрузки контекста Gateway; отдельных тестов Checkout и Inventory пока нет.
+
+Команды совместного запуска, примеры запросов и воспроизведения эксперимента будут добавлены по мере готовности соответствующих частей.
