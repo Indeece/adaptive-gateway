@@ -62,7 +62,13 @@ flowchart TD
 
 ## Технологии
 
-Java 21, Spring Boot MVC, Maven Wrapper и синхронный HTTP-клиент с конечными таймаутами. Для локального стенда предусмотрен Docker Compose, для нагрузки — k6, для анализа JSONL-результатов — Python и matplotlib.
+Java 21, Spring Boot MVC 4.1.2 и Maven Wrapper с Maven 3.10.0. Совместимость версий описана в [требованиях Spring Boot](https://docs.spring.io/spring-boot/system-requirements.html) и [требованиях Maven](https://maven.apache.org/docs/3.10.0/release-notes.html).
+
+Для исходящих запросов выбран синхронный `RestClient` с Apache HttpClient 5; точную версию клиента задаёт BOM Spring Boot. MVC соответствует последовательному HTTP-пути стенда. Apache позволяет явно ограничивать пул и отдельно задавать ожидание соединения из пула, установление соединения и чтение ответа. См. [адаптер Spring для Apache HttpClient](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/http/client/HttpComponentsClientHttpRequestFactory.html).
+
+Зависимости клиента подключены; при реализации маршрутов предстоит задать конечные таймауты и отключить автоматические повторы и перенаправления. Таймаут чтения не равен общему дедлайну вызова: зависания и чтение тела будут проверены отдельно.
+
+Для локального стенда предусмотрен Docker Compose, для нагрузки — k6, для анализа JSONL-результатов — Python и matplotlib.
 
 Базовая работа ограничена одним компьютером, двумя маршрутами и одним общим ресурсом. Тема исследования — ограничение распространения перегрузки в таком стенде.
 
