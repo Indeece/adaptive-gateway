@@ -1,4 +1,7 @@
 HELP.md
+# В Git хранится только корневой README.
+*.[mM][dD]
+!/README.md
 AGENTS.md
 /plan/
 /docs/STATE.md
