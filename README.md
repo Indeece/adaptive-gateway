@@ -66,7 +66,7 @@ Java 21, Spring Boot MVC 4.1.2 и Maven Wrapper с Maven 3.10.0. Совмест�
 
 Для исходящих запросов выбран синхронный `RestClient` с Apache HttpClient 5.6.5; версию клиента задаёт BOM Spring Boot 4.1.2. В собранных приложениях используется Spring Framework 7.0.10. MVC соответствует последовательному HTTP-пути стенда. Apache позволяет явно ограничивать пул и отдельно задавать ожидание соединения из пула, установление соединения и чтение ответа. См. [адаптер Spring для Apache HttpClient](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/http/client/HttpComponentsClientHttpRequestFactory.html).
 
-Зависимости клиента подключены; при реализации маршрутов предстоит задать конечные таймауты и отключить автоматические повторы и перенаправления. Таймаут чтения не равен общему дедлайну вызова: зависания и чтение тела будут проверены отдельно.
+Клиенты используют конечные таймауты: соединение и ожидание пула — по 100 мс, ожидание ответа Inventory — 650 мс, Checkout — 850 мс. Пул клиента ограничен 100 соединениями всего и на маршрут. Автоматические повторы и перенаправления отключены. Эти ограничения одинаковы для будущих B0/B1/B2. Таймаут чтения не равен общему дедлайну вызова: полная проверка медленного чтения тела предусмотрена на неделе 3.
 
 Для локального стенда предусмотрен Docker Compose, для нагрузки — k6, для анализа JSONL-результатов — Python и matplotlib.
 
@@ -84,7 +84,7 @@ adaptive-gateway/
 └── inventory/     # будущий общий ограниченный ресурс
 ```
 
-Три приложения настроены для независимого запуска. Actuator предоставляет health, liveness и readiness на основном порту каждого процесса. Маршруты, общий пул, B0/B1/B2 и нагрузочные сценарии предстоит реализовать. Результатов сравнения пока нет.
+Три приложения запускаются независимо. Actuator предоставляет health, liveness и readiness на основном порту каждого процесса. Реализованы два сквозных GET-маршрута и фиксированные данные. Общий ограниченный executor Inventory, B0/B1/B2 и нагрузочные сценарии предстоит реализовать. Результатов сравнения пока нет.
 
 Проверены Java 21.0.2, Maven Wrapper с Maven 3.10.0, Docker Engine 28.5.1 (Linux), Docker Compose 2.40.0-desktop.1, k6 2.4.0 и Python 3.13.17. После запуска Docker Desktop Engine доступен. Контейнеры проекта ещё не создавались.
 
@@ -98,7 +98,7 @@ k6 version
 .\mvnw.cmd clean verify
 ```
 
-Сборка создаёт `gateway/target/gateway-0.0.1-SNAPSHOT.jar`, `checkout/target/checkout-0.0.1-SNAPSHOT.jar` и `inventory/target/inventory-0.0.1-SNAPSHOT.jar`. Для сборки одного приложения можно выполнить `.\mvnw.cmd -pl gateway -am verify` из корня (аналогично для `checkout` и `inventory`). Перенесён существующий тест загрузки контекста Gateway; отдельных тестов Checkout и Inventory пока нет.
+Сборка создаёт `gateway/target/gateway-0.0.1-SNAPSHOT.jar`, `checkout/target/checkout-0.0.1-SNAPSHOT.jar` и `inventory/target/inventory-0.0.1-SNAPSHOT.jar`. Для сборки одного приложения можно выполнить `.\mvnw.cmd -pl gateway -am verify` из корня (аналогично для `checkout` и `inventory`). Проверяются контекст Gateway и HTTP-маршруты Gateway/Checkout; отдельного JUnit-теста Inventory пока нет, его ответы проверяются сквозным smoke.
 
 ## Запуск и проверка приложений
 
@@ -148,7 +148,20 @@ Remove-Item Env:INVENTORY_PORT
 | Gateway | upstream.checkout.base-url | CHECKOUT_BASE_URL | http://localhost:8081 |
 | Gateway и Checkout | upstream.inventory.base-url | INVENTORY_BASE_URL | http://localhost:8082 |
 
-Параметры адресов пока не используются HTTP-клиентами: сами маршруты будут добавлены следующим шагом. При смене порта сервиса его адрес у вызывающего приложения нужно менять отдельно.
+Параметры адресов используются HTTP-клиентами. При смене порта сервиса его адрес у вызывающего приложения нужно менять отдельно.
+
+## Контракт маршрутов
+
+Фиксированный SKU — `SKU-001`, остаток — 10 единиц, цена оценки — 100.00 RUB.
+
+| Запрос Gateway | Путь | Ответ 200 |
+|---|---|---|
+| `GET /availability/SKU-001` | Gateway → Inventory | `{"sku":"SKU-001","available":true,"quantity":10}` |
+| `GET /quotes/SKU-001` | Gateway → Checkout → Inventory | `{"sku":"SKU-001","available":true,"price":100.00,"currency":"RUB"}` |
+
+Checkout выполняет ровно один `GET /internal/batch-availability?sku=SKU-001`. Batch возвращает `items` с одним элементом наличия; в текущем минимальном стенде комплект содержит один фиксированный SKU. Цена фиксирована, базы данных нет.
+
+Неизвестный SKU возвращает HTTP 404 с полями `code=not_found` и `message`. Инфраструктурные 502/503/504 передаются по цепочке; ошибка соединения обозначается `502 upstream_transport`, таймаут — `504 upstream_timeout`. Корректные ответы, ошибки, разрыв соединения, отсутствие повторов и перенаправлений проверяются HTTP-тестами на локальном stub.
 
 ## Автоматическая проверка запуска на Windows
 
@@ -167,3 +180,56 @@ Remove-Item Env:INVENTORY_PORT
 ```
 
 Оба набора портов проверены успешно. Логи каждого запуска сохраняются в `target/health-smoke/<идентификатор>/` и исключены из Git. Проверка относится к запуску и health; измерений производительности пока нет.
+
+## Запуск через Docker Compose
+
+Нужны Java 21, доступ к Maven Central и запущенный Docker Engine с Compose. Сначала соберите актуальные JAR; Dockerfile копирует их из target и сам Maven не запускает:
+
+```powershell
+.\mvnw.cmd clean verify
+docker compose config --quiet
+docker compose up -d --build --wait --wait-timeout 120
+.\scripts\smoke-routes.ps1
+docker compose ps
+```
+
+Публикуется только Gateway на `127.0.0.1:8080`; Checkout и Inventory доступны внутри сети Compose. Их readiness проверяется контейнерными healthcheck, а depends_on ожидает готовности зависимостей. Подробнее: [порядок запуска Compose](https://docs.docker.com/compose/how-tos/startup-order/).
+
+Образ Java закреплён как `eclipse-temurin:21.0.9_10-jre-jammy` с digest `sha256:cc11c035bb25cc709d7b1e3f43cbff15d69e06e2dba23eec431b64627d27e705`. Приложения работают под UID 10001; каждому контейнеру задано 1 CPU и 512 MiB памяти. Локальные образы приложений имеют тег week1; это рабочие сборки, а не замороженная экспериментальная версия.
+
+Для другого порта Gateway задайте `$env:GATEWAY_HOST_PORT = '18080'` до запуска, затем проверяйте `.\scripts\smoke-routes.ps1 -BaseUrl http://localhost:18080`. Внутренние порты и адреса при этом не меняются.
+
+Примеры запросов:
+
+```powershell
+curl.exe --fail http://localhost:8080/availability/SKU-001
+curl.exe --fail http://localhost:8080/quotes/SKU-001
+```
+
+Остановка и удаление только ресурсов этого проекта:
+
+```powershell
+docker compose down
+```
+
+Для проверки воспроизводимости снова выполните up с --build и --wait, затем smoke-routes. Для просмотра ошибок используйте `docker compose logs --no-color`. Первый и повторный запуск проверены с обоими маршрутами и неизвестным SKU. При запуске без контейнеров полный smoke выполняется командой `.\scripts\smoke-health.ps1 -CheckRoutes`.
+
+## Путь запроса и границы текущей реализации
+
+Servlet-контроллер Gateway принимает HTTP-запрос в потоке Tomcat. Для availability он синхронно вызывает Inventory. Для quotes он вызывает Checkout, который делает один пакетный HTTP-запрос в Inventory и формирует фиксированную оценку. Три процесса независимы; общих объектов Java между ними нет.
+
+Фиксированные ответы позволяют сначала проверить топологию, ошибки и транспорт. В текущей реализации Inventory ещё выполняет операции прямо в servlet-потоках: отдельного общего bounded executor и управляемого замедления пока нет. Поэтому готовый каркас подтверждает работоспособность HTTP-цепочек, а перенос перегрузки и пользу ограничения ещё не доказывает. Эти измерения начнутся после моделирования общего ресурса.
+
+Введение и обзор строятся на следующих источниках. Это рабочий список для проекта, который предстоит дополнить академическими исследованиями и оформить по требованиям ВКР:
+
+| Источник | Для чего используется |
+|---|---|
+| [Google SRE: Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/) | Распространение отказов при исчерпании ресурсов и опасность усиления нагрузки повторами |
+| [Google SRE: Handling Overload](https://sre.google/sre-book/handling-overload/) | Отказы при перегрузке и ограничение нагрузки |
+| [Spring: RestClient](https://docs.spring.io/spring-framework/reference/7.0/web/webmvc-client.html) | Синхронная модель исходящих HTTP-вызовов |
+| [Apache HttpClientBuilder](https://hc.apache.org/httpcomponents-client-5.6.x/current/httpclient5/apidocs/org/apache/hc/client5/http/impl/classic/HttpClientBuilder.html) | Отключение retries и redirects |
+| [Java 21: ThreadPoolExecutor](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ThreadPoolExecutor.html) | Следующий этап: конечные ресурсы, очередь и отказ при переполнении |
+| [Docker Compose: Startup order](https://docs.docker.com/compose/how-tos/startup-order/) | Readiness зависимостей при запуске стенда |
+| [k6: Built-in metrics](https://grafana.com/docs/k6/latest/using-k6/metrics/reference/) | Будущая методика: состав задержки, завершения запросов и dropped_iterations |
+
+Источники просмотрены 21.11.2026. Их документация обосновывает инженерные решения, но не подтверждает будущий выигрыш B2.
