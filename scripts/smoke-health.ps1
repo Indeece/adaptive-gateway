@@ -2,7 +2,8 @@ param(
     [ValidateRange(1, 65535)][int]$GatewayPort = 8080,
     [ValidateRange(1, 65535)][int]$CheckoutPort = 8081,
     [ValidateRange(1, 65535)][int]$InventoryPort = 8082,
-    [ValidateRange(1, 300)][int]$StartupTimeoutSeconds = 60
+    [ValidateRange(1, 300)][int]$StartupTimeoutSeconds = 60,
+    [switch]$CheckRoutes
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -39,7 +40,7 @@ try {
         $previousPort = [Environment]::GetEnvironmentVariable($portVariable, 'Process')
         try {
             [Environment]::SetEnvironmentVariable($portVariable, [string]$service.Port, 'Process')
-            $service.Process = Start-Process -FilePath $javaPath -ArgumentList @('-jar', ('"' + $service.Jar + '"')) -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory "$($service.Name).out.log") -RedirectStandardError (Join-Path $logDirectory "$($service.Name).err.log")
+            $service.Process = Start-Process -FilePath $javaPath -ArgumentList @("-Dupstream.inventory.base-url=http://localhost:$InventoryPort", "-Dupstream.checkout.base-url=http://localhost:$CheckoutPort", '-jar', ('"' + $service.Jar + '"')) -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory "$($service.Name).out.log") -RedirectStandardError (Join-Path $logDirectory "$($service.Name).err.log")
         } finally {
             [Environment]::SetEnvironmentVariable($portVariable, $previousPort, 'Process')
         }
@@ -70,6 +71,9 @@ try {
         }
         if ($status -ne 404) { throw "$($service.Name) unexpectedly exposes /actuator/env (HTTP $status)" }
         Write-Output "$($service.Name): health/liveness/readiness UP on $($service.Port); env HTTP 404"
+    }
+    if ($CheckRoutes) {
+        & (Join-Path $PSScriptRoot 'smoke-routes.ps1') -BaseUrl "http://localhost:$GatewayPort"
     }
     $services[2].Process.Kill()
     if (-not $services[2].Process.WaitForExit(10000)) { throw 'Inventory did not stop.' }
