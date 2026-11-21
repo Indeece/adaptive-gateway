@@ -98,7 +98,7 @@ k6 version
 .\mvnw.cmd clean verify
 ```
 
-Сборка создаёт `gateway/target/gateway-0.0.1-SNAPSHOT.jar`, `checkout/target/checkout-0.0.1-SNAPSHOT.jar` и `inventory/target/inventory-0.0.1-SNAPSHOT.jar`. Для сборки одного приложения можно выполнить `.\mvnw.cmd -pl gateway -am verify` из корня (аналогично для `checkout` и `inventory`). Перенесён существующий тест загрузки контекста Gateway; отдельных тестов Checkout и Inventory пока нет.
+Сборка создаёт `gateway/target/gateway-0.0.1-SNAPSHOT.jar`, `checkout/target/checkout-0.0.1-SNAPSHOT.jar` и `inventory/target/inventory-0.0.1-SNAPSHOT.jar`. Для сборки одного приложения можно выполнить `.\mvnw.cmd -pl gateway -am verify` из корня (аналогично для `checkout` и `inventory`). Проверяются контекст Gateway и HTTP-маршруты Gateway/Checkout; отдельного JUnit-теста Inventory пока нет, его ответы проверяются сквозным smoke.
 
 ## Запуск и проверка приложений
 
@@ -180,3 +180,56 @@ Checkout выполняет ровно один `GET /internal/batch-availabilit
 ```
 
 Оба набора портов проверены успешно. Логи каждого запуска сохраняются в `target/health-smoke/<идентификатор>/` и исключены из Git. Проверка относится к запуску и health; измерений производительности пока нет.
+
+## Запуск через Docker Compose
+
+Нужны Java 21, доступ к Maven Central и запущенный Docker Engine с Compose. Сначала соберите актуальные JAR; Dockerfile копирует их из target и сам Maven не запускает:
+
+```powershell
+.\mvnw.cmd clean verify
+docker compose config --quiet
+docker compose up -d --build --wait --wait-timeout 120
+.\scripts\smoke-routes.ps1
+docker compose ps
+```
+
+Публикуется только Gateway на `127.0.0.1:8080`; Checkout и Inventory доступны внутри сети Compose. Их readiness проверяется контейнерными healthcheck, а depends_on ожидает готовности зависимостей. Подробнее: [порядок запуска Compose](https://docs.docker.com/compose/how-tos/startup-order/).
+
+Образ Java закреплён как `eclipse-temurin:21.0.9_10-jre-jammy` с digest `sha256:cc11c035bb25cc709d7b1e3f43cbff15d69e06e2dba23eec431b64627d27e705`. Приложения работают под UID 10001; каждому контейнеру задано 1 CPU и 512 MiB памяти. Локальные образы приложений имеют тег week1; это рабочие сборки, а не замороженная экспериментальная версия.
+
+Для другого порта Gateway задайте `$env:GATEWAY_HOST_PORT = '18080'` до запуска, затем проверяйте `.\scripts\smoke-routes.ps1 -BaseUrl http://localhost:18080`. Внутренние порты и адреса при этом не меняются.
+
+Примеры запросов:
+
+```powershell
+curl.exe --fail http://localhost:8080/availability/SKU-001
+curl.exe --fail http://localhost:8080/quotes/SKU-001
+```
+
+Остановка и удаление только ресурсов этого проекта:
+
+```powershell
+docker compose down
+```
+
+Для проверки воспроизводимости снова выполните up с --build и --wait, затем smoke-routes. Для просмотра ошибок используйте `docker compose logs --no-color`. Первый и повторный запуск проверены с обоими маршрутами и неизвестным SKU. При запуске без контейнеров полный smoke выполняется командой `.\scripts\smoke-health.ps1 -CheckRoutes`.
+
+## Путь запроса и границы текущей реализации
+
+Servlet-контроллер Gateway принимает HTTP-запрос в потоке Tomcat. Для availability он синхронно вызывает Inventory. Для quotes он вызывает Checkout, который делает один пакетный HTTP-запрос в Inventory и формирует фиксированную оценку. Три процесса независимы; общих объектов Java между ними нет.
+
+Фиксированные ответы позволяют сначала проверить топологию, ошибки и транспорт. В текущей реализации Inventory ещё выполняет операции прямо в servlet-потоках: отдельного общего bounded executor и управляемого замедления пока нет. Поэтому готовый каркас подтверждает работоспособность HTTP-цепочек, а перенос перегрузки и пользу ограничения ещё не доказывает. Эти измерения начнутся после моделирования общего ресурса.
+
+Введение и обзор строятся на следующих источниках. Это рабочий список для проекта, который предстоит дополнить академическими исследованиями и оформить по требованиям ВКР:
+
+| Источник | Для чего используется |
+|---|---|
+| [Google SRE: Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/) | Распространение отказов при исчерпании ресурсов и опасность усиления нагрузки повторами |
+| [Google SRE: Handling Overload](https://sre.google/sre-book/handling-overload/) | Отказы при перегрузке и ограничение нагрузки |
+| [Spring: RestClient](https://docs.spring.io/spring-framework/reference/7.0/web/webmvc-client.html) | Синхронная модель исходящих HTTP-вызовов |
+| [Apache HttpClientBuilder](https://hc.apache.org/httpcomponents-client-5.6.x/current/httpclient5/apidocs/org/apache/hc/client5/http/impl/classic/HttpClientBuilder.html) | Отключение retries и redirects |
+| [Java 21: ThreadPoolExecutor](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ThreadPoolExecutor.html) | Следующий этап: конечные ресурсы, очередь и отказ при переполнении |
+| [Docker Compose: Startup order](https://docs.docker.com/compose/how-tos/startup-order/) | Readiness зависимостей при запуске стенда |
+| [k6: Built-in metrics](https://grafana.com/docs/k6/latest/using-k6/metrics/reference/) | Будущая методика: состав задержки, завершения запросов и dropped_iterations |
+
+Источники просмотрены 21.11.2026. Их документация обосновывает инженерные решения, но не подтверждает будущий выигрыш B2.
