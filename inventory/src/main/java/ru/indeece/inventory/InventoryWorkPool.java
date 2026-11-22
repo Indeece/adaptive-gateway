@@ -7,6 +7,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -14,24 +15,42 @@ import org.springframework.stereotype.Service;
 public class InventoryWorkPool {
     private static final long DEADLINE_NANOS = TimeUnit.MILLISECONDS.toNanos(450);
     private final ThreadPoolExecutor executor;
+    private final Object admissionLock = new Object();
+    private final AtomicInteger active = new AtomicInteger();
+    private FaultState fault = new FaultState(false, System.currentTimeMillis(), 0);
+
+    public enum Operation { AVAILABILITY, BATCH }
+
+    public record FaultState(boolean enabled, long appliedEpochMs, long revision) {}
 
     public InventoryWorkPool(ThreadPoolExecutor executor) {
         this.executor = executor;
     }
 
-    public <T> T execute(Callable<T> work) {
-        long deadline = System.nanoTime() + DEADLINE_NANOS;
-        FutureTask<T> task = new FutureTask<>(() -> {
-            checkDeadline(deadline);
-            T result = work.call();
-            checkDeadline(deadline);
-            return result;
-        });
-        try {
-            executor.execute(task);
-        } catch (RejectedExecutionException exception) {
-            throw new InventoryWorkException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "inventory_overload", "Inventory queue is full or executor is stopped");
+    public FaultState setFault(boolean enabled) {
+        synchronized (admissionLock) {
+            fault = new FaultState(enabled, System.currentTimeMillis(), fault.revision() + 1);
+            return fault;
+        }
+    }
+
+    public int activeTasks() {
+        return active.get();
+    }
+
+    public <T> T execute(Operation operation, Callable<T> work) {
+        long queuedAtNanos = System.nanoTime();
+        long deadline = queuedAtNanos + DEADLINE_NANOS;
+        WorkTask<T> task;
+        synchronized (admissionLock) {
+            int durationMs = operation == Operation.AVAILABILITY ? 15 : (fault.enabled() ? 200 : 45);
+            task = new WorkTask<>(work, queuedAtNanos, deadline, durationMs, fault.revision(), active);
+            try {
+                executor.execute(task);
+            } catch (RejectedExecutionException exception) {
+                throw new InventoryWorkException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "inventory_overload", "Inventory queue is full or executor is stopped");
+            }
         }
 
         try {
@@ -55,6 +74,34 @@ public class InventoryWorkPool {
                 throw error;
             }
             throw new IllegalStateException("Inventory task failed", cause);
+        }
+    }
+
+    static final class WorkTask<T> extends FutureTask<T> {
+        final long queuedAtNanos;
+        final long deadlineNanos;
+        final int durationMs;
+        final long faultRevision;
+
+        WorkTask(Callable<T> work, long queuedAtNanos, long deadlineNanos,
+                 int durationMs, long faultRevision, AtomicInteger active) {
+            super(() -> {
+                checkDeadline(deadlineNanos);
+                active.incrementAndGet();
+                try {
+                    Thread.sleep(durationMs);
+                    checkDeadline(deadlineNanos);
+                    T result = work.call();
+                    checkDeadline(deadlineNanos);
+                    return result;
+                } finally {
+                    active.decrementAndGet();
+                }
+            });
+            this.queuedAtNanos = queuedAtNanos;
+            this.deadlineNanos = deadlineNanos;
+            this.durationMs = durationMs;
+            this.faultRevision = faultRevision;
         }
     }
 

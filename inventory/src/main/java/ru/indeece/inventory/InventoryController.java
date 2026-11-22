@@ -19,19 +19,14 @@ public class InventoryController {
     @GetMapping("/availability/{sku}")
     public Availability availability(@PathVariable String sku) {
         Availability item = lookup(sku);
-        return workPool.execute(() -> {
-            Thread.sleep(15);
-            return item;
-        });
+        return workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> item);
     }
 
     @GetMapping("/internal/batch-availability")
     public BatchAvailability batch(@RequestParam String sku) {
         Availability item = lookup(sku);
-        return workPool.execute(() -> {
-            Thread.sleep(45);
-            return new BatchAvailability(List.of(item));
-        });
+        return workPool.execute(InventoryWorkPool.Operation.BATCH,
+                () -> new BatchAvailability(List.of(item)));
     }
 
     private Availability lookup(String sku) {

@@ -76,6 +76,11 @@ class HttpRouteTest {
         assertEquals(503, response.statusCode());
         assertTrue(response.body().contains("inventory_overload"));
         assertEquals(2, calls.get());
+        status = 504; body = "{\"code\":\"inventory_deadline\",\"message\":\"Deadline exceeded\"}";
+        var deadline = request();
+        assertEquals(504, deadline.statusCode());
+        assertTrue(deadline.body().contains("inventory_deadline"));
+        assertEquals(3, calls.get());
     }
     @Test void timesOutWithoutRetryAndCanRecover() throws Exception {
         hang = true; release = new CountDownLatch(1);

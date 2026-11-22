@@ -21,6 +21,7 @@ services:
         JAR_FILE: inventory/target/inventory-0.0.1-SNAPSHOT.jar
     environment:
       INVENTORY_PORT: 8080
+      INVENTORY_FAULT_CONTROL_ENABLED: "true"
   checkout:
     <<: *runtime
     image: adaptive-gateway-checkout:week1

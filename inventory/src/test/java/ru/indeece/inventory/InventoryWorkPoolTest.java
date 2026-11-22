@@ -28,6 +28,15 @@ class InventoryWorkPoolTest {
     private InventoryWorkPool workPool;
 
     @Test
+    void faultControlIsDisabledByDefault() throws Exception {
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/internal/fault?enabled=true"))
+                    .timeout(Duration.ofSeconds(3)).POST(HttpRequest.BodyPublishers.noBody()).build();
+            assertEquals(404, client.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
+        }
+    }
+
+    @Test
     void bothRoutesReturnExpectedBodies() throws Exception {
         var availability = get("/availability/SKU-001");
         assertEquals(200, availability.statusCode());
@@ -81,7 +90,7 @@ class InventoryWorkPoolTest {
         CountDownLatch release = new CountDownLatch(1);
         try {
             InventoryWorkException error = assertThrows(InventoryWorkException.class,
-                    () -> workPool.execute(() -> {
+                    () -> workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> {
                         started.countDown();
                         try {
                             release.await();
@@ -97,13 +106,13 @@ class InventoryWorkPoolTest {
         } finally {
             release.countDown();
         }
-        assertEquals("recovered", workPool.execute(() -> "recovered"));
+        assertEquals("recovered", workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> "recovered"));
     }
 
     @Test
     void unexpectedTaskFailureRemainsVisible() {
         IllegalStateException original = new IllegalStateException("test failure");
-        var actual = assertThrows(IllegalStateException.class, () -> workPool.execute(() -> {
+        var actual = assertThrows(IllegalStateException.class, () -> workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> {
             throw original;
         }));
         assertSame(original, actual);
