@@ -1,4 +1,4 @@
-package ru.indeece.checkout;
+package ru.indeece.checkout.config;
 
 import java.time.Duration;
 import org.apache.hc.client5.http.config.ConnectionConfig;
@@ -12,31 +12,43 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+/**
+ * Создаёт HTTP-клиенты с ограниченными пулами соединений и таймаутами.
+ */
 @Configuration
 public class HttpClientConfiguration {
     @Bean(destroyMethod = "close")
     CloseableHttpClient upstreamHttpClient() {
         var connectionConfig = ConnectionConfig.custom()
                 .setConnectTimeout(Timeout.ofMilliseconds(100))
-                .setSocketTimeout(Timeout.ofMilliseconds(650)).build();
+                .setSocketTimeout(Timeout.ofMilliseconds(650))
+                .build();
         var pool = PoolingHttpClientConnectionManagerBuilder.create()
-                .setMaxConnTotal(100).setMaxConnPerRoute(100)
-                .setDefaultConnectionConfig(connectionConfig).build();
-        return HttpClients.custom().setConnectionManager(pool)
-                .disableAutomaticRetries().disableRedirectHandling().build();
+                .setMaxConnTotal(100)
+                .setMaxConnPerRoute(100)
+                .setDefaultConnectionConfig(connectionConfig)
+                .build();
+        return HttpClients.custom()
+                .setConnectionManager(pool)
+                .disableAutomaticRetries()
+                .disableRedirectHandling()
+                .build();
     }
 
-    static RestClient client(CloseableHttpClient http, String baseUrl, int readTimeoutMs) {
-        var factory = new HttpComponentsClientHttpRequestFactory(http);
+    private RestClient createClient(CloseableHttpClient httpClient, String baseUrl, int readTimeoutMs) {
+        var factory = new HttpComponentsClientHttpRequestFactory(httpClient);
         factory.setConnectionRequestTimeout(Duration.ofMillis(100));
         factory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
-        return RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+        return RestClient.builder()
+                .baseUrl(baseUrl)
+                .requestFactory(factory)
+                .build();
     }
 
     @Bean
-    RestClient inventoryClient(CloseableHttpClient http,
+    RestClient inventoryClient(CloseableHttpClient httpClient,
             @Value("${upstream.inventory.base-url}") String baseUrl) {
-        return client(http, baseUrl, 650);
+        return createClient(httpClient, baseUrl, 650);
     }
 
 }

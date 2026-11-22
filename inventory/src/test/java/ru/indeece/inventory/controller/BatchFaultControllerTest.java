@@ -1,6 +1,7 @@
-package ru.indeece.inventory;
+package ru.indeece.inventory.controller;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -11,9 +12,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
+/**
+ * Проверяет HTTP-команды смены профиля и серверную отметку применения.
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "inventory.fault-control.enabled=true")
-class FaultControllerTest {
+class BatchFaultControllerTest {
     @LocalServerPort
     private int port;
 

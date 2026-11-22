@@ -1,6 +1,10 @@
-package ru.indeece.inventory;
+package ru.indeece.inventory.controller;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,9 +19,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
+import ru.indeece.inventory.error.InventoryTaskException;
+import ru.indeece.inventory.execution.InventoryOperation;
+import ru.indeece.inventory.execution.InventoryTaskExecutor;
 
+/**
+ * Проверяет ответы Inventory и использование общего ограниченного пула через HTTP.
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class InventoryWorkPoolTest {
+class InventoryControllerTest {
     @LocalServerPort
     private int port;
 
@@ -25,7 +35,7 @@ class InventoryWorkPoolTest {
     private ThreadPoolExecutor executor;
 
     @Autowired
-    private InventoryWorkPool workPool;
+    private InventoryTaskExecutor taskExecutor;
 
     @Test
     void faultControlIsDisabledByDefault() throws Exception {
@@ -89,8 +99,8 @@ class InventoryWorkPoolTest {
         CountDownLatch exited = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         try {
-            InventoryWorkException error = assertThrows(InventoryWorkException.class,
-                    () -> workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> {
+            InventoryTaskException error = assertThrows(InventoryTaskException.class,
+                    () -> taskExecutor.execute(InventoryOperation.AVAILABILITY, () -> {
                         started.countDown();
                         try {
                             release.await();
@@ -106,13 +116,13 @@ class InventoryWorkPoolTest {
         } finally {
             release.countDown();
         }
-        assertEquals("recovered", workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> "recovered"));
+        assertEquals("recovered", taskExecutor.execute(InventoryOperation.AVAILABILITY, () -> "recovered"));
     }
 
     @Test
     void unexpectedTaskFailureRemainsVisible() {
         IllegalStateException original = new IllegalStateException("test failure");
-        var actual = assertThrows(IllegalStateException.class, () -> workPool.execute(InventoryWorkPool.Operation.AVAILABILITY, () -> {
+        var actual = assertThrows(IllegalStateException.class, () -> taskExecutor.execute(InventoryOperation.AVAILABILITY, () -> {
             throw original;
         }));
         assertSame(original, actual);
@@ -131,6 +141,9 @@ class InventoryWorkPoolTest {
         assertTrue(response.body().contains("\"code\":\"" + code + "\""), response.body());
     }
 
+    /**
+     * Удерживает воркеры до явного освобождения для воспроизводимой проверки очереди.
+     */
     private class OccupiedWorkers implements AutoCloseable {
         private final CountDownLatch release = new CountDownLatch(1);
         private final CountDownLatch finished = new CountDownLatch(8);

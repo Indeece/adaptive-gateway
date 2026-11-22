@@ -1,4 +1,4 @@
-package ru.indeece.inventory;
+package ru.indeece.inventory.config;
 
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -6,8 +6,11 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Создаёт общий пул из восьми воркеров с очередью на шестнадцать задач.
+ */
 @Configuration
-public class InventoryConfiguration {
+public class InventoryExecutorConfiguration {
     @Bean(destroyMethod = "shutdownNow")
     ThreadPoolExecutor inventoryExecutor() {
         return new ThreadPoolExecutor(

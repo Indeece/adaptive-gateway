@@ -1,17 +1,31 @@
-package ru.indeece.inventory;
+package ru.indeece.inventory.execution;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static ru.indeece.inventory.InventoryWorkPool.Operation.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static ru.indeece.inventory.execution.InventoryOperation.AVAILABILITY;
+import static ru.indeece.inventory.execution.InventoryOperation.BATCH;
 
-import java.util.concurrent.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import ru.indeece.inventory.error.InventoryTaskException;
 
-class InventoryLifecycleTest {
+/**
+ * Проверяет дедлайны, отмену, учёт работы и порядок переключения профиля задач.
+ */
+class InventoryTaskExecutorTest {
     private final RecordingExecutor executor = new RecordingExecutor();
-    private final InventoryWorkPool pool = new InventoryWorkPool(executor);
+    private final InventoryTaskExecutor pool = new InventoryTaskExecutor(executor);
     private final ExecutorService callers = Executors.newFixedThreadPool(2);
     private final CountDownLatch releaseWorker = new CountDownLatch(1);
 
@@ -78,7 +92,7 @@ class InventoryLifecycleTest {
         var response = callers.submit(() -> pool.execute(BATCH, () -> ran.getAndSet(true)));
         assertTrue(executor.admitted.await(5, TimeUnit.SECONDS));
         var error = assertThrows(ExecutionException.class, () -> response.get(3, TimeUnit.SECONDS));
-        assertEquals("inventory_deadline", ((InventoryWorkException) error.getCause()).code());
+        assertEquals("inventory_deadline", ((InventoryTaskException) error.getCause()).code());
         assertTrue(executor.lastTask.isCancelled());
         assertTrue(executor.getQueue().isEmpty());
         releaseWorker.countDown();
@@ -92,11 +106,11 @@ class InventoryLifecycleTest {
         AtomicBoolean ran = new AtomicBoolean();
         AtomicInteger active = new AtomicInteger();
         long expired = System.nanoTime() - 1;
-        var task = new InventoryWorkPool.WorkTask<>(() -> ran.getAndSet(true),
+        var task = new InventoryTask<>(() -> ran.getAndSet(true),
                 expired - 450_000_000L, expired, 15, 0, active);
         task.run();
         var error = assertThrows(ExecutionException.class, task::get);
-        assertEquals("inventory_deadline", ((InventoryWorkException) error.getCause()).code());
+        assertEquals("inventory_deadline", ((InventoryTaskException) error.getCause()).code());
         assertFalse(ran.get());
         assertEquals(0, active.get());
     }
@@ -136,7 +150,7 @@ class InventoryLifecycleTest {
         Thread caller = new Thread(() -> {
             try {
                 pool.execute(BATCH, () -> ran.getAndSet(true));
-            } catch (InventoryWorkException error) {
+            } catch (InventoryTaskException error) {
                 deadlineError.set("inventory_deadline".equals(error.code()));
                 keptInterrupt.set(Thread.currentThread().isInterrupted());
             }
@@ -172,10 +186,13 @@ class InventoryLifecycleTest {
         assertTrue(started.await(5, TimeUnit.SECONDS));
     }
 
+    /**
+     * Сохраняет принятую задачу и управляет моментом завершения её постановки в тесте.
+     */
     private static class RecordingExecutor extends ThreadPoolExecutor {
         final CountDownLatch admitted = new CountDownLatch(1);
         final CountDownLatch releaseAdmission = new CountDownLatch(1);
-        volatile InventoryWorkPool.WorkTask<?> lastTask;
+        volatile InventoryTask<?> lastTask;
         volatile boolean holdAdmission;
 
         RecordingExecutor() {
@@ -185,7 +202,7 @@ class InventoryLifecycleTest {
         @Override
         public void execute(Runnable task) {
             super.execute(task);
-            if (task instanceof InventoryWorkPool.WorkTask<?> workTask) {
+            if (task instanceof InventoryTask<?> workTask) {
                 lastTask = workTask;
                 admitted.countDown();
                 if (holdAdmission) {
