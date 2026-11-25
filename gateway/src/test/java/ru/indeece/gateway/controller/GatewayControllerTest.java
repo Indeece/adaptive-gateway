@@ -17,12 +17,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import ru.indeece.gateway.dto.RouteMetricsSnapshot;
+import ru.indeece.gateway.monitoring.GatewayMetrics;
+import ru.indeece.gateway.monitoring.GatewayRoute;
 
 /**
  * Проверяет HTTP-маршрут и передачу ошибок соседнего сервиса через управляемую заглушку.
@@ -40,6 +45,8 @@ class GatewayControllerTest {
     private static volatile String observedPath;
     private static volatile boolean holdResponse;
     private static volatile boolean disconnect;
+    private static volatile boolean holdBody;
+    private static volatile CountDownLatch bodyStarted = new CountDownLatch(0);
     private static volatile CountDownLatch releaseResponse = new CountDownLatch(0);
 
     static {
@@ -62,6 +69,14 @@ class GatewayControllerTest {
                         exchange.getResponseHeaders().set("Location", "/redirect-target");
                     }
                     exchange.sendResponseHeaders(upstreamStatus, bytes.length);
+                    if (holdBody) {
+                        exchange.getResponseBody().write(bytes, 0, 1);
+                        exchange.getResponseBody().flush();
+                        bodyStarted.countDown();
+                        releaseResponse.await(5, TimeUnit.SECONDS);
+                        exchange.getResponseBody().write(bytes, 1, bytes.length - 1);
+                        return;
+                    }
                     exchange.getResponseBody().write(bytes);
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
@@ -84,6 +99,10 @@ class GatewayControllerTest {
     @LocalServerPort
     private int port;
 
+    @Autowired
+    private GatewayMetrics metrics;
+    private RouteMetricsSnapshot beforeRequest;
+
     @BeforeEach
     void resetStub() {
         upstreamCalls.set(0);
@@ -91,7 +110,37 @@ class GatewayControllerTest {
         upstreamBody = "{\"sku\":\"SKU-001\",\"available\":true,\"quantity\":10}";
         holdResponse = false;
         disconnect = false;
+        holdBody = false;
+        bodyStarted = new CountDownLatch(0);
         releaseResponse = new CountDownLatch(0);
+        beforeRequest = metrics.snapshot().get(GatewayRoute.AVAILABILITY);
+    }
+
+    @AfterEach
+    void verifyCompletedAccounting() {
+        var afterRequest = metrics.snapshot().get(GatewayRoute.AVAILABILITY);
+        assertEquals(0, afterRequest.active());
+        assertEquals(upstreamCalls.get(), afterRequest.completed() - beforeRequest.completed());
+        assertEquals(afterRequest.started(), afterRequest.completed());
+    }
+
+    @Test
+    void countsCallAsActiveUntilTheWholeBodyIsRead() throws Exception {
+        holdBody = true;
+        bodyStarted = new CountDownLatch(1);
+        releaseResponse = new CountDownLatch(1);
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/availability/SKU-001"))
+                .timeout(Duration.ofSeconds(4)).GET().build();
+        var response = caller.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        try {
+            assertTrue(bodyStarted.await(5, TimeUnit.SECONDS));
+            var pending = metrics.snapshot().get(GatewayRoute.AVAILABILITY);
+            assertEquals(1, pending.active());
+            assertEquals(beforeRequest.completed(), pending.completed());
+        } finally {
+            releaseResponse.countDown();
+        }
+        assertEquals(200, response.get(4, TimeUnit.SECONDS).statusCode());
     }
 
     private HttpResponse<String> request() throws Exception {

@@ -8,9 +8,11 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import ru.indeece.inventory.dto.BatchFaultState;
+import ru.indeece.inventory.dto.InventoryResourceSnapshot;
 import ru.indeece.inventory.error.InventoryTaskException;
 
 /**
@@ -22,10 +24,15 @@ public class InventoryTaskExecutor {
     private final ThreadPoolExecutor executor;
     private final Object admissionLock = new Object();
     private final AtomicInteger activeTasks = new AtomicInteger();
+    private final AtomicLong expiredRequests = new AtomicLong();
+    private final int queueCapacity;
+    private long accepted;
+    private long rejected;
     private BatchFaultState fault = new BatchFaultState(false, System.currentTimeMillis(), 0);
 
     public InventoryTaskExecutor(ThreadPoolExecutor executor) {
         this.executor = executor;
+        this.queueCapacity = executor.getQueue().size() + executor.getQueue().remainingCapacity();
     }
 
     public BatchFaultState setFault(boolean enabled) {
@@ -37,6 +44,14 @@ public class InventoryTaskExecutor {
 
     public int activeTasks() {
         return activeTasks.get();
+    }
+
+    public InventoryResourceSnapshot snapshot() {
+        synchronized (admissionLock) {
+            return new InventoryResourceSnapshot(activeTasks.get(), executor.getQueue().size(),
+                    executor.getMaximumPoolSize(), queueCapacity, accepted, rejected,
+                    expiredRequests.get(), executor.getCompletedTaskCount(), fault);
+        }
     }
 
     public <T> T execute(InventoryOperation operation, Callable<T> work) {
@@ -51,7 +66,9 @@ public class InventoryTaskExecutor {
             task = new InventoryTask<>(work, queuedAtNanos, deadline, durationMs, fault.revision(), activeTasks);
             try {
                 executor.execute(task);
+                accepted++;
             } catch (RejectedExecutionException exception) {
+                rejected++;
                 throw new InventoryTaskException(HttpStatus.SERVICE_UNAVAILABLE,
                         "inventory_overload", "Inventory queue is full or executor is stopped");
             }
@@ -61,14 +78,21 @@ public class InventoryTaskExecutor {
             return task.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
         } catch (TimeoutException exception) {
             cancel(task);
+            expiredRequests.incrementAndGet();
             throw deadlineExceeded();
         } catch (InterruptedException exception) {
             cancel(task);
+            expiredRequests.incrementAndGet();
             Thread.currentThread().interrupt();
             throw deadlineExceeded();
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
+            if (cause instanceof InventoryTaskException taskException
+                    && "inventory_deadline".equals(taskException.code())) {
+                expiredRequests.incrementAndGet();
+            }
             if (cause instanceof InterruptedException) {
+                expiredRequests.incrementAndGet();
                 throw deadlineExceeded();
             }
             if (cause instanceof RuntimeException runtimeException) {

@@ -48,6 +48,7 @@ class InventoryControllerTest {
 
     @Test
     void bothRoutesReturnExpectedBodies() throws Exception {
+        long acceptedBefore = taskExecutor.snapshot().accepted();
         var availability = get("/availability/SKU-001");
         assertEquals(200, availability.statusCode());
         assertEquals("{\"sku\":\"SKU-001\",\"available\":true,\"quantity\":10}", availability.body());
@@ -55,10 +56,12 @@ class InventoryControllerTest {
         var batch = get("/internal/batch-availability?sku=SKU-001");
         assertEquals(200, batch.statusCode());
         assertEquals("{\"items\":[{\"sku\":\"SKU-001\",\"available\":true,\"quantity\":10}]}", batch.body());
+        assertEquals(acceptedBefore + 2, taskExecutor.snapshot().accepted());
     }
 
     @Test
     void bothRoutesRejectWhenSameEightWorkersAndSixteenQueueSlotsAreOccupied() throws Exception {
+        long rejectedBefore = taskExecutor.snapshot().rejected();
         try (var occupied = new OccupiedWorkers()) {
             CountDownLatch queuedFinished = new CountDownLatch(16);
             for (int index = 0; index < 16; index++) {
@@ -74,6 +77,7 @@ class InventoryControllerTest {
             assertError(get("/internal/batch-availability?sku=SKU-001"), 503, "inventory_overload");
             assertEquals(16, executor.getQueue().size());
             occupied.release();
+            assertEquals(rejectedBefore + 2, taskExecutor.snapshot().rejected());
             assertTrue(queuedFinished.await(5, TimeUnit.SECONDS));
         }
         assertEquals(200, get("/availability/SKU-001").statusCode());
@@ -87,9 +91,11 @@ class InventoryControllerTest {
 
     @Test
     void queuedRequestTimesOutAndIsRemoved() throws Exception {
+        long deadlinesBefore = taskExecutor.snapshot().deadlineExceeded();
         try (var occupied = new OccupiedWorkers()) {
             assertError(get("/availability/SKU-001"), 504, "inventory_deadline");
             assertTrue(executor.getQueue().isEmpty());
+            assertEquals(deadlinesBefore + 1, taskExecutor.snapshot().deadlineExceeded());
         }
     }
 

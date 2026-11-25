@@ -5,6 +5,7 @@ import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.core5.util.Timeout;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -18,20 +19,25 @@ import org.springframework.web.client.RestClient;
 @Configuration
 public class HttpClientConfiguration {
     @Bean(destroyMethod = "close")
-    CloseableHttpClient upstreamHttpClient() {
+    CloseableHttpClient upstreamHttpClient(PoolingHttpClientConnectionManager connectionPool) {
+        return HttpClients.custom()
+                .setConnectionManager(connectionPool)
+                .setConnectionManagerShared(true)
+                .disableAutomaticRetries()
+                .disableRedirectHandling()
+                .build();
+    }
+
+    @Bean(destroyMethod = "close")
+    PoolingHttpClientConnectionManager upstreamConnectionPool() {
         var connectionConfig = ConnectionConfig.custom()
                 .setConnectTimeout(Timeout.ofMilliseconds(100))
                 .setSocketTimeout(Timeout.ofMilliseconds(650))
                 .build();
-        var pool = PoolingHttpClientConnectionManagerBuilder.create()
+        return PoolingHttpClientConnectionManagerBuilder.create()
                 .setMaxConnTotal(100)
                 .setMaxConnPerRoute(100)
                 .setDefaultConnectionConfig(connectionConfig)
-                .build();
-        return HttpClients.custom()
-                .setConnectionManager(pool)
-                .disableAutomaticRetries()
-                .disableRedirectHandling()
                 .build();
     }
 

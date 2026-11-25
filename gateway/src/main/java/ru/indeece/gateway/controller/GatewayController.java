@@ -8,6 +8,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import ru.indeece.gateway.dto.AvailabilityResponse;
 import ru.indeece.gateway.dto.QuoteResponse;
+import ru.indeece.gateway.monitoring.GatewayMetrics;
+import ru.indeece.gateway.monitoring.GatewayRoute;
 
 /**
  * Принимает внешние запросы наличия и цены и направляет их в Inventory или Checkout.
@@ -16,15 +18,22 @@ import ru.indeece.gateway.dto.QuoteResponse;
 public class GatewayController {
     private final RestClient inventoryClient;
     private final RestClient checkoutClient;
+    private final GatewayMetrics metrics;
 
     public GatewayController(@Qualifier("inventoryClient") RestClient inventoryClient,
-                             @Qualifier("checkoutClient") RestClient checkoutClient) {
+                             @Qualifier("checkoutClient") RestClient checkoutClient,
+                             GatewayMetrics metrics) {
         this.inventoryClient = inventoryClient;
         this.checkoutClient = checkoutClient;
+        this.metrics = metrics;
     }
 
     @GetMapping("/availability/{sku}")
     public AvailabilityResponse getAvailability(@PathVariable String sku) {
+        return metrics.measure(GatewayRoute.AVAILABILITY, () -> requestAvailability(sku));
+    }
+
+    private AvailabilityResponse requestAvailability(String sku) {
         AvailabilityResponse response = inventoryClient.get()
                 .uri("/availability/{sku}", sku)
                 .retrieve()
@@ -37,6 +46,10 @@ public class GatewayController {
 
     @GetMapping("/quotes/{sku}")
     public QuoteResponse getQuote(@PathVariable String sku) {
+        return metrics.measure(GatewayRoute.QUOTES, () -> requestQuote(sku));
+    }
+
+    private QuoteResponse requestQuote(String sku) {
         QuoteResponse response = checkoutClient.get()
                 .uri("/quotes/{sku}", sku)
                 .retrieve()
