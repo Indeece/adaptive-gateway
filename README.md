@@ -184,6 +184,8 @@ Checkout выполняет ровно один `GET /internal/batch-availabilit
 
 ## Запуск через Docker Compose
 
+GitHub Actions проверяет каждый PR в `main`. Workflow в `.github/workflows/ci.yml` собирает три сервиса на Java 21 через Maven Wrapper, запускает тесты и проверяет Compose с профилями мониторинга и нагрузки.
+
 Нужны Java 21, доступ к Maven Central и запущенный Docker Engine с Compose. Сначала соберите актуальные JAR; Dockerfile копирует их из target и сам Maven не запускает:
 
 ```powershell
