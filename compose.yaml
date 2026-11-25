@@ -21,6 +21,10 @@ services:
         JAR_FILE: inventory/target/inventory-0.0.1-SNAPSHOT.jar
     environment:
       INVENTORY_PORT: 8080
+      INVENTORY_FAULT_CONTROL_ENABLED: "true"
+      SNAPSHOTS_ENABLED: "true"
+      SNAPSHOT_FILE: /tmp/snapshots/inventory.jsonl
+      RUN_ID: ${RUN_ID:-manual}
   checkout:
     <<: *runtime
     image: adaptive-gateway-checkout:week1
@@ -30,6 +34,9 @@ services:
         JAR_FILE: checkout/target/checkout-0.0.1-SNAPSHOT.jar
     environment:
       CHECKOUT_PORT: 8080
+      SNAPSHOTS_ENABLED: "true"
+      SNAPSHOT_FILE: /tmp/snapshots/checkout.jsonl
+      RUN_ID: ${RUN_ID:-manual}
       INVENTORY_BASE_URL: http://inventory:8080
     depends_on:
       inventory:
@@ -43,6 +50,9 @@ services:
         JAR_FILE: gateway/target/gateway-0.0.1-SNAPSHOT.jar
     environment:
       GATEWAY_PORT: 8080
+      SNAPSHOTS_ENABLED: "true"
+      SNAPSHOT_FILE: /tmp/snapshots/gateway.jsonl
+      RUN_ID: ${RUN_ID:-manual}
       INVENTORY_BASE_URL: http://inventory:8080
       CHECKOUT_BASE_URL: http://checkout:8080
     ports:
