@@ -11,7 +11,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,6 +19,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.ObjectWriter;
 import tools.jackson.databind.SerializationFeature;
 import ru.indeece.inventory.execution.InventoryTaskExecutor;
+import ru.indeece.inventory.config.ObservabilityProperties;
 
 /**
  * Сохраняет секундные JSONL-снимки ресурсов inventory с временем и идентификатором процесса.
@@ -38,12 +38,11 @@ public class ResourceSnapshotLogger {
     private final InventoryTaskExecutor taskExecutor;
 
     public ResourceSnapshotLogger(ObjectMapper mapper, MeterRegistry meters, InventoryTaskExecutor taskExecutor,
-            @Value("${observability.snapshots.file}") String file,
-            @Value("${observability.run-id}") String runId) throws IOException {
+            ObservabilityProperties settings) throws IOException {
         this.jsonWriter = mapper.writer().without(SerializationFeature.INDENT_OUTPUT);
         this.meters = meters;
-        this.file = Path.of(file).toAbsolutePath();
-        this.runId = runId;
+        this.file = settings.snapshots().file().toAbsolutePath();
+        this.runId = settings.runId();
         this.taskExecutor = taskExecutor;
         Files.createDirectories(this.file.getParent());
         try (var writer = Files.newBufferedWriter(this.file, StandardCharsets.UTF_8,
@@ -52,7 +51,8 @@ public class ResourceSnapshotLogger {
         }
     }
 
-    @Scheduled(fixedDelay = 1000, initialDelay = 1000)
+    @Scheduled(fixedDelayString = "${observability.snapshots.interval}",
+            initialDelayString = "${observability.snapshots.interval}")
     public synchronized void writeSnapshot() throws IOException {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("schemaVersion", 1);

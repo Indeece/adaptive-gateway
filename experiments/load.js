@@ -2,88 +2,91 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter } from 'k6/metrics';
 
-const durationSeconds = Number(__ENV.DURATION_SECONDS || 10);
-const quotesRate = Number(__ENV.QUOTES_RPS || 50);
-const availabilityRate = Number(__ENV.AVAILABILITY_RPS || 15);
-const baseUrl = __ENV.BASE_URL || 'http://localhost:8080';
-const runId = __ENV.RUN_ID || 'manual';
-const started = new Counter('request_starts');
-const completed = new Counter('request_completions');
-const startsByRoute = {
-    quotes: new Counter('quotes_starts'),
-    availability: new Counter('availability_starts'),
-};
-const completionsByRoute = {
-    quotes: new Counter('quotes_completions'),
-    availability: new Counter('availability_completions'),
-};
+const timeout = Number(__ENV.REQUEST_TIMEOUT_MS);
+const faultOn = Number(__ENV.WARMUP_SECONDS) + Number(__ENV.NORMAL_SECONDS);
+const faultOff = faultOn + Number(__ENV.FAULT_SECONDS);
+const duration = faultOff + Number(__ENV.RECOVERY_SECONDS);
+const timeoutOption = `${timeout}ms`;
+const starts = new Counter('request_starts');
+const completions = new Counter('request_completions');
+const useful = new Counter('useful_responses');
+const errors = new Counter('response_errors');
 
-function scenario(route, rate) {
+function load(rate) {
+    const virtualUsers = Math.ceil(rate * timeout / 1000) + 10;
     return {
         executor: 'constant-arrival-rate',
-        exec: route,
-        rate,
-        timeUnit: '1s',
-        duration: `${durationSeconds}s`,
-        preAllocatedVUs: Math.ceil(rate * 1.2) + 10,
-        maxVUs: Math.ceil(rate * 1.2) + 10,
-        gracefulStop: '3s',
+        rate, timeUnit: '1s', duration: `${duration}s`,
+        preAllocatedVUs: virtualUsers, maxVUs: virtualUsers,
+        gracefulStop: `${__ENV.DRAIN_SECONDS}s`,
+    };
+}
+
+function switchAt(seconds, enabled) {
+    return {
+        executor: 'per-vu-iterations', exec: 'switchFault',
+        vus: 1, iterations: 1, startTime: `${seconds}s`,
+        maxDuration: '4s', gracefulStop: '0s',
+        env: { FAULT_ENABLED: String(enabled) },
     };
 }
 
 export const options = {
     scenarios: {
-        quotes: scenario('quotes', quotesRate),
-        availability: scenario('availability', availabilityRate),
+        quotes: load(Number(__ENV.QUOTES_RPS)),
+        availability: load(Number(__ENV.AVAILABILITY_RPS)),
+        slow_batch: switchAt(faultOn, true),
+        restore_batch: switchAt(faultOff, false),
     },
-    thresholds: { dropped_iterations: ['count==0'] },
     maxRedirects: 0,
+    systemTags: ['scenario'],
+    thresholds: { dropped_iterations: ['count==0'] },
 };
 
-export function setup() {
-    console.log(JSON.stringify({ type: 'loadStart', runId, epochMs: Date.now(), durationSeconds }));
-}
-
-function request(route) {
-    const requestId = `${route}-${exec.scenario.iterationInTest}`;
-    const startEpochMs = Date.now();
-    started.add(1);
-    startsByRoute[route].add(1);
-    console.log(JSON.stringify({ type: 'start', runId, route, requestId, startEpochMs }));
-    const response = http.get(`${baseUrl}/${route}/SKU-001`, {
-        timeout: '1200ms', tags: { route, name: `/${route}/{sku}` },
-    });
-    const endEpochMs = Date.now();
-    const elapsedMs = endEpochMs - startEpochMs;
-    let validBody = false;
-    let outcome = response.status === 0 ? 'client_transport' : `http_${response.status}`;
-    try {
-        const body = response.json();
-        if (response.status === 200) {
-            validBody = body.sku === 'SKU-001' && body.available === true;
-            validBody = validBody && (route === 'quotes'
-                ? body.price === 100 && body.currency === 'RUB'
-                : body.quantity === 10);
-            outcome = validBody ? 'success' : 'invalid_body';
-        } else if (typeof body.code === 'string') {
-            outcome = body.code;
-        }
-    } catch (_) {
-        if (response.status === 200) outcome = 'invalid_body';
+function applyFault(enabled) {
+    const url = `${__ENV.INVENTORY_URL}/internal/fault?enabled=${enabled}`;
+    const response = http.post(url, null, { timeout: '3s', tags: { name: 'fault control' } });
+    if (response.status !== 200 || response.json('enabled') !== enabled) {
+        exec.test.abort(`Inventory could not apply fault=${enabled} (HTTP ${response.status})`);
     }
-    completed.add(1);
-    completionsByRoute[route].add(1);
-    console.log(JSON.stringify({
-        type: 'result', runId, mode: 'B0', route, requestId,
-        startEpochMs, endEpochMs, elapsedMs, status: response.status,
-        outcome, validBody,
-        useful: response.status === 200 && validBody && elapsedMs <= (route === 'quotes' ? 280 : 100),
-    }));
+    console.log(response.body);
 }
 
-export function quotes() { request('quotes'); }
-export function availability() { request('availability'); }
+export function setup() {
+    applyFault(false);
+}
 
-export function handleSummary(data) {
-    return { [__ENV.SUMMARY_FILE || 'summary.json']: JSON.stringify(data, null, 2) };
+export function switchFault() {
+    applyFault(__ENV.FAULT_ENABLED === 'true');
+}
+
+export function teardown() {
+    applyFault(false);
+}
+
+export default function () {
+    const route = exec.scenario.name;
+    const isQuote = route === 'quotes';
+    const slo = Number(isQuote ? __ENV.QUOTES_SLO_MS : __ENV.AVAILABILITY_SLO_MS);
+    const tags = { route, name: `/${route}/{sku}` };
+    const startedAt = Date.now();
+    starts.add(1, tags);
+    const response = http.get(`${__ENV.GATEWAY_URL}/${route}/SKU-001`, { timeout: timeoutOption, tags });
+    const elapsed = Date.now() - startedAt;
+    let body;
+    try {
+        body = response.json();
+    } catch {
+        body = null;
+    }
+    const valid = body?.sku === 'SKU-001' && body.available === true &&
+        (isQuote ? body.price === 100 && body.currency === 'RUB' : body.quantity === 10);
+    const onTime = response.status === 200 && valid && elapsed <= slo;
+    completions.add(1, tags);
+    useful.add(onTime ? 1 : 0, tags);
+    if (!onTime) {
+        let outcome = response.status === 200 ? 'late_or_invalid_body' : `http_${response.status}`;
+        if (typeof body?.code === 'string') outcome = body.code;
+        errors.add(1, { ...tags, outcome });
+    }
 }

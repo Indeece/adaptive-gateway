@@ -1,0 +1,99 @@
+{
+  "uid": "adaptive-gateway",
+  "title": "Adaptive Gateway",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-10m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Полезные ответы по SLO",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"100 * sum by (route) (rate(k6_useful_responses_total[5s])) / sum by (route) (rate(k6_request_completions_total[5s]))","legendFormat":"{{route}}"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Полезные запросы в секунду",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"sum by (route) (rate(k6_useful_responses_total[5s]))","legendFormat":"{{route}}"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Задержка HTTP, p90",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"1000 * k6_http_req_duration_p90{route=~\"quotes|availability\",status=\"\"}","legendFormat":"{{route}}"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Неуспешные и поздние ответы в секунду",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"sum by (route, outcome) (rate(k6_response_errors_total[5s]))","legendFormat":"{{route}} · {{outcome}}"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Пул Inventory",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"inventory_tasks_active","legendFormat":"Активные задачи"},
+        {"refId":"B","expr":"inventory_tasks_queued","legendFormat":"Очередь"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Замедление batch",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"inventory_fault_enabled","legendFormat":"Замедление · 1 включено"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Занятые потоки Tomcat",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"sum by (job) (tomcat_threads_busy_threads)","legendFormat":"{{job}}"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "В работе у k6 и пропуски генератора",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"sum by (route) (k6_request_starts_total) - sum by (route) (k6_request_completions_total)","legendFormat":"{{route}} · в работе"},
+        {"refId":"B","expr":"sum(k6_dropped_iterations_total) or vector(0)","legendFormat":"Пропущенные итерации"}
+      ]
+    }
+  ]
+}

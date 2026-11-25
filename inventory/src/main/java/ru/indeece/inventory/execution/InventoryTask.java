@@ -10,11 +10,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class InventoryTask<T> extends FutureTask<T> {
     final long queuedAtNanos;
     final long deadlineNanos;
-    final int durationMs;
+    final long durationMs;
     final long faultRevision;
 
     InventoryTask(Callable<T> work, long queuedAtNanos, long deadlineNanos,
-                  int durationMs, long faultRevision, AtomicInteger activeTasks) {
+                  long durationMs, long faultRevision, AtomicInteger activeTasks) {
         super(() -> performWork(work, deadlineNanos, durationMs, activeTasks));
         this.queuedAtNanos = queuedAtNanos;
         this.deadlineNanos = deadlineNanos;
@@ -23,7 +23,7 @@ final class InventoryTask<T> extends FutureTask<T> {
     }
 
     private static <T> T performWork(Callable<T> work, long deadlineNanos,
-                                     int durationMs, AtomicInteger activeTasks) throws Exception {
+                                     long durationMs, AtomicInteger activeTasks) throws Exception {
         checkDeadline(deadlineNanos);
         activeTasks.incrementAndGet();
         try {

@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: inventory
+
+server:
+  port: ${INVENTORY_PORT:8082}
+  tomcat:
+    threads:
+      max: 100
+    mbeanregistry:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: ${ACTUATOR_ENDPOINTS:health}
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+observability:
+  run-id: ${RUN_ID:manual}
+  snapshots:
+    enabled: ${SNAPSHOTS_ENABLED:false}
+    file: ${SNAPSHOT_FILE:target/snapshots/inventory.jsonl}
+    interval: 1s
+
+inventory:
+  split-pools: ${INVENTORY_SPLIT_POOLS:false}
+  fault-control:
+    enabled: ${INVENTORY_FAULT_CONTROL_ENABLED:false}
+  shared-workers: 8
+  shared-queue-capacity: 16
+  batch-workers: 6
+  batch-queue-capacity: 12
+  availability-workers: 2
+  availability-queue-capacity: 4
+  deadline: 450ms
+  availability-duration: 15ms
+  batch-duration: 45ms
+  slowed-batch-duration: 200ms

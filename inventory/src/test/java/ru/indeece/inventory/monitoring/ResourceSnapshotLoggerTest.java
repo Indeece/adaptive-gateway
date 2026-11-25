@@ -10,12 +10,16 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.io.TempDir;
+import ru.indeece.inventory.config.InventoryProperties;
+import ru.indeece.inventory.config.ObservabilityProperties;
+import ru.indeece.inventory.config.SnapshotProperties;
 import ru.indeece.inventory.execution.InventoryOperation;
 import ru.indeece.inventory.execution.InventoryTaskExecutor;
 import tools.jackson.databind.json.JsonMapper;
@@ -24,6 +28,10 @@ import tools.jackson.databind.json.JsonMapper;
  * Проверяет JSONL-формат, накопление строк и различимость перезапусков в одном файле.
  */
 class ResourceSnapshotLoggerTest {
+    private static final InventoryProperties TASK_SETTINGS = new InventoryProperties(
+            false, 8, 16, 6, 12, 2, 4, Duration.ofMillis(450),
+            Duration.ofMillis(15), Duration.ofMillis(45), Duration.ofMillis(200));
+
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
     @AfterEach
@@ -41,13 +49,14 @@ class ResourceSnapshotLoggerTest {
         var mapper = JsonMapper.builder().build();
         try (var executor = new ThreadPoolExecutor(8, 8, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(16))) {
-            InventoryTaskExecutor tasks = new InventoryTaskExecutor(executor);
-            ResourceSnapshotLogger first = new ResourceSnapshotLogger(mapper, meters, tasks, file.toString(), "test-run");
+            InventoryTaskExecutor tasks = new InventoryTaskExecutor(executor, TASK_SETTINGS);
+            var settings = new ObservabilityProperties("test-run", new SnapshotProperties(true, file, Duration.ofSeconds(1)));
+            ResourceSnapshotLogger first = new ResourceSnapshotLogger(mapper, meters, tasks, settings);
             first.writeSnapshot();
             tasks.execute(InventoryOperation.AVAILABILITY, () -> "done");
             tasks.setFault(true);
             first.writeSnapshot();
-            ResourceSnapshotLogger restarted = new ResourceSnapshotLogger(mapper, meters, tasks, file.toString(), "test-run");
+            ResourceSnapshotLogger restarted = new ResourceSnapshotLogger(mapper, meters, tasks, settings);
             restarted.writeSnapshot();
             var lines = Files.readAllLines(file);
             assertEquals(3, lines.size());
@@ -73,8 +82,9 @@ class ResourceSnapshotLoggerTest {
     void invalidOutputPathFailsAtStartup() {
         try (var executor = new ThreadPoolExecutor(8, 8, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(16))) {
+            var settings = new ObservabilityProperties("test-run", new SnapshotProperties(true, directory, Duration.ofSeconds(1)));
             assertThrows(IOException.class, () -> new ResourceSnapshotLogger(JsonMapper.builder().build(),
-                    meters, new InventoryTaskExecutor(executor), directory.toString(), "test-run"));
+                    meters, new InventoryTaskExecutor(executor, TASK_SETTINGS), settings));
         }
     }
 }

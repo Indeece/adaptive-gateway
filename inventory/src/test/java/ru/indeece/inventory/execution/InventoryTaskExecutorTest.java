@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static ru.indeece.inventory.execution.InventoryOperation.AVAILABILITY;
 import static ru.indeece.inventory.execution.InventoryOperation.BATCH;
 
+import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import ru.indeece.inventory.config.InventoryProperties;
 import ru.indeece.inventory.error.InventoryTaskException;
 
 /**
@@ -25,7 +27,9 @@ import ru.indeece.inventory.error.InventoryTaskException;
  */
 class InventoryTaskExecutorTest {
     private final RecordingExecutor executor = new RecordingExecutor();
-    private final InventoryTaskExecutor pool = new InventoryTaskExecutor(executor);
+    private final InventoryTaskExecutor pool = new InventoryTaskExecutor(executor,
+            new InventoryProperties(false, 8, 16, 6, 12, 2, 4, Duration.ofMillis(450),
+                    Duration.ofMillis(15), Duration.ofMillis(45), Duration.ofMillis(200)));
     private final ExecutorService callers = Executors.newFixedThreadPool(2);
     private final CountDownLatch releaseWorker = new CountDownLatch(1);
 

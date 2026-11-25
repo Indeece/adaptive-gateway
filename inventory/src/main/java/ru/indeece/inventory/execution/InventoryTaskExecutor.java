@@ -6,6 +6,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import ru.indeece.inventory.dto.ExecutorResourceSnapshot;
+import ru.indeece.inventory.config.InventorySettings;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
@@ -25,7 +26,8 @@ import ru.indeece.inventory.error.InventoryTaskException;
  */
 @Service
 public class InventoryTaskExecutor {
-    private static final long DEADLINE_NANOS = TimeUnit.MILLISECONDS.toNanos(450);
+    private final InventorySettings settings;
+    private final long deadlineNanos;
     private final ThreadPoolExecutor executor;
     private final ThreadPoolExecutor availabilityExecutor;
     private final Object admissionLock = new Object();
@@ -36,17 +38,21 @@ public class InventoryTaskExecutor {
     private long rejected;
     private BatchFaultState fault = new BatchFaultState(false, System.currentTimeMillis(), 0);
 
-    public InventoryTaskExecutor(ThreadPoolExecutor executor) {
-        this(executor, executor);
+    public InventoryTaskExecutor(ThreadPoolExecutor executor, InventorySettings settings) {
+        this(executor, executor, settings);
     }
 
     @Autowired
     public InventoryTaskExecutor(ThreadPoolExecutor executor,
-            @Qualifier("availabilityExecutor") ObjectProvider<ThreadPoolExecutor> availability) {
-        this(executor, availability.getIfAvailable(() -> executor));
+            @Qualifier("availabilityExecutor") ObjectProvider<ThreadPoolExecutor> availability,
+            InventorySettings settings) {
+        this(executor, availability.getIfAvailable(() -> executor), settings);
     }
 
-    InventoryTaskExecutor(ThreadPoolExecutor executor, ThreadPoolExecutor availabilityExecutor) {
+    InventoryTaskExecutor(ThreadPoolExecutor executor, ThreadPoolExecutor availabilityExecutor,
+            InventorySettings settings) {
+        this.settings = settings;
+        this.deadlineNanos = settings.deadline().toNanos();
         this.executor = executor;
         this.availabilityExecutor = availabilityExecutor;
         this.queueCapacity = capacity(executor)
@@ -62,6 +68,20 @@ public class InventoryTaskExecutor {
 
     public int activeTasks() {
         return activeTasks.get();
+    }
+
+    public int queuedTasks() {
+        int queued = executor.getQueue().size();
+        if (executor != availabilityExecutor) {
+            queued += availabilityExecutor.getQueue().size();
+        }
+        return queued;
+    }
+
+    public boolean faultEnabled() {
+        synchronized (admissionLock) {
+            return fault.enabled();
+        }
     }
 
     public InventoryResourceSnapshot snapshot() {
@@ -90,13 +110,13 @@ public class InventoryTaskExecutor {
 
     public <T> T execute(InventoryOperation operation, Callable<T> work) {
         long queuedAtNanos = System.nanoTime();
-        long deadline = queuedAtNanos + DEADLINE_NANOS;
+        long deadline = queuedAtNanos + deadlineNanos;
         InventoryTask<T> task;
         ThreadPoolExecutor selectedPool = operation == InventoryOperation.AVAILABILITY ? availabilityExecutor : executor;
         synchronized (admissionLock) {
-            int durationMs = switch (operation) {
-                case AVAILABILITY -> 15;
-                case BATCH -> fault.enabled() ? 200 : 45;
+            long durationMs = switch (operation) {
+                case AVAILABILITY -> settings.availabilityDuration().toMillis();
+                case BATCH -> (fault.enabled() ? settings.slowedBatchDuration() : settings.batchDuration()).toMillis();
             };
             task = new InventoryTask<>(work, queuedAtNanos, deadline, durationMs, fault.revision(), activeTasks);
             try {

@@ -6,19 +6,18 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 /**
- * Создаёт общий пул из восьми воркеров с очередью на шестнадцать задач.
+ * Создаёт рабочие пулы Inventory из настроек выбранной топологии.
  */
 @Configuration
 public class InventoryExecutorConfiguration {
     @Bean(destroyMethod = "shutdownNow")
     @Primary
-    ThreadPoolExecutor inventoryExecutor(@Value("${inventory.split-pools:false}") boolean splitPools) {
-        int workers = splitPools ? 6 : 8;
-        int queueCapacity = splitPools ? 12 : 16;
+    ThreadPoolExecutor inventoryExecutor(InventorySettings settings) {
+        int workers = settings.splitPools() ? settings.batchWorkers() : settings.sharedWorkers();
+        int queueCapacity = settings.splitPools() ? settings.batchQueueCapacity() : settings.sharedQueueCapacity();
         return new ThreadPoolExecutor(
                 workers, workers, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(queueCapacity),
@@ -28,9 +27,9 @@ public class InventoryExecutorConfiguration {
 
     @Bean(destroyMethod = "shutdownNow")
     @ConditionalOnProperty(name = "inventory.split-pools", havingValue = "true")
-    ThreadPoolExecutor availabilityExecutor() {
-        return new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(4),
+    ThreadPoolExecutor availabilityExecutor(InventorySettings settings) {
+        return new ThreadPoolExecutor(settings.availabilityWorkers(), settings.availabilityWorkers(), 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(settings.availabilityQueueCapacity()),
                 Thread.ofPlatform().name("inventory-availability-", 0).factory(),
                 new ThreadPoolExecutor.AbortPolicy());
     }

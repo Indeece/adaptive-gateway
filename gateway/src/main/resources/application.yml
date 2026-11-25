@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: gateway
+
+server:
+  port: ${GATEWAY_PORT:8080}
+  tomcat:
+    threads:
+      max: 100
+    mbeanregistry:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: ${ACTUATOR_ENDPOINTS:health}
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+observability:
+  run-id: ${RUN_ID:manual}
+  snapshots:
+    enabled: ${SNAPSHOTS_ENABLED:false}
+    file: ${SNAPSHOT_FILE:target/snapshots/gateway.jsonl}
+    interval: 1s
+
+upstream:
+  connect-timeout: 100ms
+  connection-request-timeout: 100ms
+  socket-timeout: 650ms
+  max-connections: 100
+  max-connections-per-route: 100
+  inventory:
+    base-url: ${INVENTORY_BASE_URL:http://localhost:8082}
+    read-timeout: 650ms
+  checkout:
+    base-url: ${CHECKOUT_BASE_URL:http://localhost:8081}
+    read-timeout: 850ms
