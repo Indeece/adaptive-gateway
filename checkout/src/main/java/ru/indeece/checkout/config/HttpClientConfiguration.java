@@ -1,13 +1,11 @@
 package ru.indeece.checkout.config;
 
-import java.time.Duration;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.core5.util.Timeout;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
@@ -29,32 +27,32 @@ public class HttpClientConfiguration {
     }
 
     @Bean(destroyMethod = "close")
-    PoolingHttpClientConnectionManager upstreamConnectionPool() {
+    PoolingHttpClientConnectionManager upstreamConnectionPool(UpstreamProperties settings) {
         var connectionConfig = ConnectionConfig.custom()
-                .setConnectTimeout(Timeout.ofMilliseconds(100))
-                .setSocketTimeout(Timeout.ofMilliseconds(650))
+                .setConnectTimeout(Timeout.of(settings.connectTimeout()))
+                .setSocketTimeout(Timeout.of(settings.socketTimeout()))
                 .build();
         return PoolingHttpClientConnectionManagerBuilder.create()
-                .setMaxConnTotal(100)
-                .setMaxConnPerRoute(100)
+                .setMaxConnTotal(settings.maxConnections())
+                .setMaxConnPerRoute(settings.maxConnectionsPerRoute())
                 .setDefaultConnectionConfig(connectionConfig)
                 .build();
     }
 
-    private RestClient createClient(CloseableHttpClient httpClient, String baseUrl, int readTimeoutMs) {
+    private RestClient createClient(CloseableHttpClient httpClient, UpstreamProperties settings,
+            UpstreamEndpointProperties endpoint) {
         var factory = new HttpComponentsClientHttpRequestFactory(httpClient);
-        factory.setConnectionRequestTimeout(Duration.ofMillis(100));
-        factory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
+        factory.setConnectionRequestTimeout(settings.connectionRequestTimeout());
+        factory.setReadTimeout(endpoint.readTimeout());
         return RestClient.builder()
-                .baseUrl(baseUrl)
+                .baseUrl(endpoint.baseUrl())
                 .requestFactory(factory)
                 .build();
     }
 
     @Bean
-    RestClient inventoryClient(CloseableHttpClient httpClient,
-            @Value("${upstream.inventory.base-url}") String baseUrl) {
-        return createClient(httpClient, baseUrl, 650);
+    RestClient inventoryClient(CloseableHttpClient httpClient, UpstreamProperties settings) {
+        return createClient(httpClient, settings, settings.inventory());
     }
 
 }

@@ -68,7 +68,7 @@ Java 21, Spring Boot MVC 4.1.2 и Maven Wrapper с Maven 3.10.0. Совмест�
 
 Клиенты используют конечные таймауты: соединение и ожидание пула — по 100 мс, ожидание ответа Inventory — 650 мс, Checkout — 850 мс. Пул клиента ограничен 100 соединениями всего и на маршрут. Автоматические повторы и перенаправления отключены. Эти ограничения одинаковы для будущих B0/B1/B2. Таймаут чтения не равен общему дедлайну вызова: полная проверка медленного чтения тела предусмотрена на неделе 3.
 
-Для локального стенда предусмотрен Docker Compose, для нагрузки — k6, для анализа JSONL-результатов — Python и matplotlib.
+Для локального стенда используется Docker Compose, для нагрузки — k6. Prometheus хранит метрики, а Grafana показывает их на дашборде.
 
 Базовая работа ограничена одним компьютером, двумя маршрутами и одним общим ресурсом. Тема исследования — ограничение распространения перегрузки в таком стенде.
 
@@ -96,7 +96,6 @@ adaptive-gateway/
 java -version
 .\mvnw.cmd -v
 docker info
-k6 version
 .\mvnw.cmd clean verify
 ```
 
@@ -185,6 +184,8 @@ Checkout выполняет ровно один `GET /internal/batch-availabilit
 
 ## Запуск через Docker Compose
 
+GitHub Actions проверяет каждый PR в `main`. Workflow в `.github/workflows/ci.yml` собирает три сервиса на Java 21 через Maven Wrapper, запускает тесты и проверяет Compose с профилями мониторинга и нагрузки.
+
 Нужны Java 21, доступ к Maven Central и запущенный Docker Engine с Compose. Сначала соберите актуальные JAR; Dockerfile копирует их из target и сам Maven не запускает:
 
 ```powershell
@@ -226,33 +227,33 @@ Inventory ставит каждую операцию в один общий `Thr
 
 Checkout проверяет, что пакетный ответ содержит один непустой элемент с ожидаемым SKU. Некорректный ответ, включая `items: [null]`, приводит к `502 upstream_transport`.
 
-## Снимки ресурсов и учёт вызовов
+## Нагрузка и графики в Grafana
 
-При включённом `SNAPSHOTS_ENABLED=true` каждый сервис пишет JSONL-снимки в отдельный файл. Интервал между записями составляет примерно секунду. `SNAPSHOT_FILE` задаёт путь, `RUN_ID` — идентификатор проверки или будущего прогона. При запуске JAR пути по умолчанию — `target/snapshots/gateway.jsonl`, `checkout.jsonl`, `inventory.jsonl`. Для включения можно передать `--observability.snapshots.enabled=true` при запуске Java. Servlet-пулы всех трёх приложений ограничены 100 потоками.
-
-В Compose запись включена. Файлы находятся в `/tmp/snapshots/` каждого контейнера. Перед `docker compose down` сохранить их на хост следующими командами.
+После сборки JAR запусти стенд с мониторингом, затем k6. Установленный на хосте k6 или Python для этого запуска не требуется.
 
 ```powershell
-New-Item -ItemType Directory target/snapshots-export
-docker compose cp gateway:/tmp/snapshots/gateway.jsonl target/snapshots-export/gateway.jsonl
-docker compose cp checkout:/tmp/snapshots/checkout.jsonl target/snapshots-export/checkout.jsonl
-docker compose cp inventory:/tmp/snapshots/inventory.jsonl target/snapshots-export/inventory.jsonl
+.\mvnw.cmd clean verify
+docker compose --profile monitoring up -d --build --wait grafana gateway
+docker compose run --rm k6
 ```
 
-Каждая строка содержит `schemaVersion=1`, `service`, `runId`, уникальный `instanceId` процесса, `sequence`, серверное `epochMs` и монотонное `uptimeMs`. Запись дописывает файл. Перезапуск создаёт новый instanceId и начинает sequence с 1. Ошибка доступа к файлу при запуске останавливает старт приложения с включённой записью. Ошибка последующей записи попадает в журнал приложения, пропущенный номер sequence позволяет обнаружить потерю снимка.
+На дашборде видны доля полезных ответов по SLO, полезные запросы в секунду, p90, исходы, занятость Inventory и момент включения замедления. Данные появляются во время прогона и остаются в локальном томе Prometheus на семь дней. [Открыть Adaptive Gateway](http://localhost:3000/d/adaptive-gateway)
 
-| Поля | Смысл |
-|---|---|
-| `servlet` во всех сервисах | Фактические busy/current/max из стандартных метрик Tomcat. `null` означает, что измеритель пока недоступен. |
-| `httpPool`, `httpRoutes` в Gateway/Checkout | Занятые (`leased`), ожидаемые (`pending`) и свободные соединения, лимит пула. Также сохраняются значения по адресам upstream. |
-| `inventory` | Активные задачи, длина очереди, лимиты 8/16, накопленные accepted/rejected/deadlineExceeded и executorCompleted, текущий fault с revision и временем применения. |
-| `routes.AVAILABILITY`, `routes.QUOTES` в Gateway | started/completed/active, накопленные исходы и суммарное/максимальное время вызовов в миллисекундах. |
+Скорость входа, длительности прогрева и фаз, таймаут и SLO заданы в `services.k6.environment` файла `compose.yml`. По умолчанию это 50 quotes/с и 15 availability/с, прогрев 20 с и три фазы по 30 с. k6 отправляет один GET на итерацию и передаёт метрики в Prometheus. Запускай один прогон за раз, поскольку сценарий меняет состояние Inventory для всего стенда. [Документация k6 о Prometheus remote write](https://grafana.com/docs/k6/latest/results-output/real-time/prometheus-remote-write/)
 
-`accepted` и `rejected` Inventory относятся к постановке задач для существующего SKU. `deadlineExceeded` включает прерванное ожидание обработчика. `executorCompleted` — стандартный счётчик завершённых исполнителем Runnable, включая отменённые задачи, которые успели попасть в исполнение. Активность и очередь снимаются последовательно и могут измениться между чтениями.
+Топологию Inventory задаёт `INVENTORY_SPLIT_POOLS` в настройках сервиса `inventory` в Compose. По умолчанию используется общий пул 8/16. Для диагностики задай `INVENTORY_SPLIT_POOLS: "true"`. Тогда у batch будет 6 воркеров и 12 мест, у availability — 2 воркера и 4 места. Повтори команду запуска стенда после изменения.
 
-В Gateway исходы представлены как `success`, `http_<статус upstream>`, `transport_error` и `unexpected_error`. `transport_error` включает таймаут, обрыв, ошибку чтения или проверки тела. Каждый вызов учитывается до получения и проверки всего тела, затем уменьшает active и увеличивает completed даже при ошибке. Счётчики каждого маршрута согласованы под короткой блокировкой, HTTP выполняется вне неё.
+Пилот B0 на исходном стенде показал перенос перегрузки на availability при общем пуле. В диагностическом запуске с разделёнными пулами availability сохранила полезность, а поток полезных quotes просел при замедлении в обеих схемах. Сырые результаты, таблицы и рисунок пилота хранятся локально в `results/`.
 
-Эти длительности измеряются внутри Gateway. Клиентскую полезность по SLO предстоит считать по данным k6. Накопленные total/max предназначены для диагностики, оконная статистика B2 появится на этапе адаптации.
+```powershell
+docker compose --profile monitoring down
+```
+
+## Настройки приложений
+
+В каждом модуле Spring Boot читает `src/main/resources/application.yml`. Раздел `inventory` задаёт размеры пулов, очередь, дедлайн, длительности операций и доступность команды замедления. `InventoryProperties` реализует интерфейс `InventorySettings`. Executor и конфигурация пула используют этот интерфейс. Gateway и Checkout получают адреса, размеры HTTP-пулов и таймауты через `UpstreamProperties`.
+
+В Compose к метрикам обращается Prometheus внутри сети стенда. Дополнительные JSONL-снимки можно включить через `SNAPSHOTS_ENABLED=true` в конфигурации нужного сервиса. `SNAPSHOT_FILE` задаёт путь, `RUN_ID` — идентификатор прогона, `observability.snapshots.interval` — интервал записи. После включения снимки доступны в `/tmp/snapshots/` контейнеров. При запуске JAR настройки снимков читаются из того же `application.yml`.
 
 ## Переключение замедления Inventory
 

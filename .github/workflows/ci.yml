@@ -1,0 +1,29 @@
+name: Проверка сборки и Compose
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Maven и Docker Compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Собрать приложения и выполнить тесты
+        run: sh ./mvnw -B -ntp verify
+
+      - name: Проверить конфигурацию Compose
+        run: docker compose --profile monitoring --profile load config --quiet

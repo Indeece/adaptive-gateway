@@ -1,6 +1,12 @@
 package ru.indeece.inventory.execution;
 
 import java.util.concurrent.Callable;
+import java.util.Map;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import ru.indeece.inventory.dto.ExecutorResourceSnapshot;
+import ru.indeece.inventory.config.InventorySettings;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
@@ -20,8 +26,10 @@ import ru.indeece.inventory.error.InventoryTaskException;
  */
 @Service
 public class InventoryTaskExecutor {
-    private static final long DEADLINE_NANOS = TimeUnit.MILLISECONDS.toNanos(450);
+    private final InventorySettings settings;
+    private final long deadlineNanos;
     private final ThreadPoolExecutor executor;
+    private final ThreadPoolExecutor availabilityExecutor;
     private final Object admissionLock = new Object();
     private final AtomicInteger activeTasks = new AtomicInteger();
     private final AtomicLong expiredRequests = new AtomicLong();
@@ -30,9 +38,25 @@ public class InventoryTaskExecutor {
     private long rejected;
     private BatchFaultState fault = new BatchFaultState(false, System.currentTimeMillis(), 0);
 
-    public InventoryTaskExecutor(ThreadPoolExecutor executor) {
+    public InventoryTaskExecutor(ThreadPoolExecutor executor, InventorySettings settings) {
+        this(executor, executor, settings);
+    }
+
+    @Autowired
+    public InventoryTaskExecutor(ThreadPoolExecutor executor,
+            @Qualifier("availabilityExecutor") ObjectProvider<ThreadPoolExecutor> availability,
+            InventorySettings settings) {
+        this(executor, availability.getIfAvailable(() -> executor), settings);
+    }
+
+    InventoryTaskExecutor(ThreadPoolExecutor executor, ThreadPoolExecutor availabilityExecutor,
+            InventorySettings settings) {
+        this.settings = settings;
+        this.deadlineNanos = settings.deadline().toNanos();
         this.executor = executor;
-        this.queueCapacity = executor.getQueue().size() + executor.getQueue().remainingCapacity();
+        this.availabilityExecutor = availabilityExecutor;
+        this.queueCapacity = capacity(executor)
+                + (executor == availabilityExecutor ? 0 : capacity(availabilityExecutor));
     }
 
     public BatchFaultState setFault(boolean enabled) {
@@ -46,26 +70,57 @@ public class InventoryTaskExecutor {
         return activeTasks.get();
     }
 
+    public int queuedTasks() {
+        int queued = executor.getQueue().size();
+        if (executor != availabilityExecutor) {
+            queued += availabilityExecutor.getQueue().size();
+        }
+        return queued;
+    }
+
+    public boolean faultEnabled() {
+        synchronized (admissionLock) {
+            return fault.enabled();
+        }
+    }
+
     public InventoryResourceSnapshot snapshot() {
         synchronized (admissionLock) {
-            return new InventoryResourceSnapshot(activeTasks.get(), executor.getQueue().size(),
-                    executor.getMaximumPoolSize(), queueCapacity, accepted, rejected,
-                    expiredRequests.get(), executor.getCompletedTaskCount(), fault);
+            boolean shared = executor == availabilityExecutor;
+            Map<String, ExecutorResourceSnapshot> pools = shared
+                    ? Map.of("shared", poolSnapshot(executor))
+                    : Map.of("batch", poolSnapshot(executor), "availability", poolSnapshot(availabilityExecutor));
+            return new InventoryResourceSnapshot(activeTasks.get(), executor.getQueue().size()
+                    + (shared ? 0 : availabilityExecutor.getQueue().size()),
+                    executor.getMaximumPoolSize() + (shared ? 0 : availabilityExecutor.getMaximumPoolSize()),
+                    queueCapacity, accepted, rejected, expiredRequests.get(),
+                    executor.getCompletedTaskCount() + (shared ? 0 : availabilityExecutor.getCompletedTaskCount()),
+                    fault, pools);
         }
+    }
+
+    private static int capacity(ThreadPoolExecutor pool) {
+        return pool.getQueue().size() + pool.getQueue().remainingCapacity();
+    }
+
+    private static ExecutorResourceSnapshot poolSnapshot(ThreadPoolExecutor pool) {
+        return new ExecutorResourceSnapshot(pool.getActiveCount(), pool.getQueue().size(),
+                pool.getMaximumPoolSize(), capacity(pool));
     }
 
     public <T> T execute(InventoryOperation operation, Callable<T> work) {
         long queuedAtNanos = System.nanoTime();
-        long deadline = queuedAtNanos + DEADLINE_NANOS;
+        long deadline = queuedAtNanos + deadlineNanos;
         InventoryTask<T> task;
+        ThreadPoolExecutor selectedPool = operation == InventoryOperation.AVAILABILITY ? availabilityExecutor : executor;
         synchronized (admissionLock) {
-            int durationMs = switch (operation) {
-                case AVAILABILITY -> 15;
-                case BATCH -> fault.enabled() ? 200 : 45;
+            long durationMs = switch (operation) {
+                case AVAILABILITY -> settings.availabilityDuration().toMillis();
+                case BATCH -> (fault.enabled() ? settings.slowedBatchDuration() : settings.batchDuration()).toMillis();
             };
             task = new InventoryTask<>(work, queuedAtNanos, deadline, durationMs, fault.revision(), activeTasks);
             try {
-                executor.execute(task);
+                selectedPool.execute(task);
                 accepted++;
             } catch (RejectedExecutionException exception) {
                 rejected++;
@@ -77,11 +132,11 @@ public class InventoryTaskExecutor {
         try {
             return task.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
         } catch (TimeoutException exception) {
-            cancel(task);
+            cancel(task, selectedPool);
             expiredRequests.incrementAndGet();
             throw deadlineExceeded();
         } catch (InterruptedException exception) {
-            cancel(task);
+            cancel(task, selectedPool);
             expiredRequests.incrementAndGet();
             Thread.currentThread().interrupt();
             throw deadlineExceeded();
@@ -105,9 +160,9 @@ public class InventoryTaskExecutor {
         }
     }
 
-    private void cancel(FutureTask<?> task) {
+    private void cancel(FutureTask<?> task, ThreadPoolExecutor pool) {
         task.cancel(true);
-        executor.remove(task);
+        pool.remove(task);
     }
 
     static InventoryTaskException deadlineExceeded() {

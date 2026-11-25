@@ -2,11 +2,13 @@ package ru.indeece.inventory;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
  * Запускает приложение Inventory и регистрацию его компонентов Spring.
  */
 @SpringBootApplication
+@ConfigurationPropertiesScan
 public class InventoryApplication {
 
     public static void main(String[] args) {
