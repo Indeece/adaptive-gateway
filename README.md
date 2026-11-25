@@ -226,6 +226,19 @@ Inventory ставит каждую операцию в один общий `Thr
 
 Checkout проверяет, что пакетный ответ содержит один непустой элемент с ожидаемым SKU. Некорректный ответ, включая `items: [null]`, приводит к `502 upstream_transport`.
 
+## Нагрузочный генератор пилота B0
+
+`experiments/load.js` создаёт независимые потоки quotes и availability через k6 constant-arrival-rate. Одна итерация выполняет один GET. Начальный вход — 50 и 15 запросов/с, клиентский timeout — 1200 мс, время завершения начатых итераций после прекращения входа — до 3 с. Для каждого запроса записываются отдельные события start и result. Результат содержит время начала/конца, статус, проверку тела, категорию исхода и полезность по SLO 280/100 мс.
+
+Для короткой функциональной проверки на работающем Gateway выполнить следующие команды.
+
+```powershell
+New-Item -ItemType Directory -Force target/load-smoke
+k6 run --log-format raw --console-output target/load-smoke/events.jsonl -e DURATION_SECONDS=5 -e SUMMARY_FILE=target/load-smoke/summary.json experiments/load.js
+```
+
+Начала и результаты имеют общий requestId. Сводка k6 отдельно считает старты, завершения и dropped_iterations. `python experiments/check_load.py target/load-smoke --duration 5` проверяет полноту и полезность исходов. Валидатор требует dropped_iterations=0 и совпадения событий с независимыми счётчиками. Отклонение числа стартов от RPS × длительность на границе сценария допускается до одного запроса и выводится явно. Фазы назначаются по времени начала запроса.
+
 ## Снимки ресурсов и учёт вызовов
 
 При включённом `SNAPSHOTS_ENABLED=true` каждый сервис пишет JSONL-снимки в отдельный файл. Интервал между записями составляет примерно секунду. `SNAPSHOT_FILE` задаёт путь, `RUN_ID` — идентификатор проверки или будущего прогона. При запуске JAR пути по умолчанию — `target/snapshots/gateway.jsonl`, `checkout.jsonl`, `inventory.jsonl`. Для включения можно передать `--observability.snapshots.enabled=true` при запуске Java. Servlet-пулы всех трёх приложений ограничены 100 потоками.
