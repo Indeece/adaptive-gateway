@@ -1,6 +1,11 @@
 package ru.indeece.inventory.execution;
 
 import java.util.concurrent.Callable;
+import java.util.Map;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import ru.indeece.inventory.dto.ExecutorResourceSnapshot;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
@@ -22,6 +27,7 @@ import ru.indeece.inventory.error.InventoryTaskException;
 public class InventoryTaskExecutor {
     private static final long DEADLINE_NANOS = TimeUnit.MILLISECONDS.toNanos(450);
     private final ThreadPoolExecutor executor;
+    private final ThreadPoolExecutor availabilityExecutor;
     private final Object admissionLock = new Object();
     private final AtomicInteger activeTasks = new AtomicInteger();
     private final AtomicLong expiredRequests = new AtomicLong();
@@ -31,8 +37,20 @@ public class InventoryTaskExecutor {
     private BatchFaultState fault = new BatchFaultState(false, System.currentTimeMillis(), 0);
 
     public InventoryTaskExecutor(ThreadPoolExecutor executor) {
+        this(executor, executor);
+    }
+
+    @Autowired
+    public InventoryTaskExecutor(ThreadPoolExecutor executor,
+            @Qualifier("availabilityExecutor") ObjectProvider<ThreadPoolExecutor> availability) {
+        this(executor, availability.getIfAvailable(() -> executor));
+    }
+
+    InventoryTaskExecutor(ThreadPoolExecutor executor, ThreadPoolExecutor availabilityExecutor) {
         this.executor = executor;
-        this.queueCapacity = executor.getQueue().size() + executor.getQueue().remainingCapacity();
+        this.availabilityExecutor = availabilityExecutor;
+        this.queueCapacity = capacity(executor)
+                + (executor == availabilityExecutor ? 0 : capacity(availabilityExecutor));
     }
 
     public BatchFaultState setFault(boolean enabled) {
@@ -48,16 +66,33 @@ public class InventoryTaskExecutor {
 
     public InventoryResourceSnapshot snapshot() {
         synchronized (admissionLock) {
-            return new InventoryResourceSnapshot(activeTasks.get(), executor.getQueue().size(),
-                    executor.getMaximumPoolSize(), queueCapacity, accepted, rejected,
-                    expiredRequests.get(), executor.getCompletedTaskCount(), fault);
+            boolean shared = executor == availabilityExecutor;
+            Map<String, ExecutorResourceSnapshot> pools = shared
+                    ? Map.of("shared", poolSnapshot(executor))
+                    : Map.of("batch", poolSnapshot(executor), "availability", poolSnapshot(availabilityExecutor));
+            return new InventoryResourceSnapshot(activeTasks.get(), executor.getQueue().size()
+                    + (shared ? 0 : availabilityExecutor.getQueue().size()),
+                    executor.getMaximumPoolSize() + (shared ? 0 : availabilityExecutor.getMaximumPoolSize()),
+                    queueCapacity, accepted, rejected, expiredRequests.get(),
+                    executor.getCompletedTaskCount() + (shared ? 0 : availabilityExecutor.getCompletedTaskCount()),
+                    fault, pools);
         }
+    }
+
+    private static int capacity(ThreadPoolExecutor pool) {
+        return pool.getQueue().size() + pool.getQueue().remainingCapacity();
+    }
+
+    private static ExecutorResourceSnapshot poolSnapshot(ThreadPoolExecutor pool) {
+        return new ExecutorResourceSnapshot(pool.getActiveCount(), pool.getQueue().size(),
+                pool.getMaximumPoolSize(), capacity(pool));
     }
 
     public <T> T execute(InventoryOperation operation, Callable<T> work) {
         long queuedAtNanos = System.nanoTime();
         long deadline = queuedAtNanos + DEADLINE_NANOS;
         InventoryTask<T> task;
+        ThreadPoolExecutor selectedPool = operation == InventoryOperation.AVAILABILITY ? availabilityExecutor : executor;
         synchronized (admissionLock) {
             int durationMs = switch (operation) {
                 case AVAILABILITY -> 15;
@@ -65,7 +100,7 @@ public class InventoryTaskExecutor {
             };
             task = new InventoryTask<>(work, queuedAtNanos, deadline, durationMs, fault.revision(), activeTasks);
             try {
-                executor.execute(task);
+                selectedPool.execute(task);
                 accepted++;
             } catch (RejectedExecutionException exception) {
                 rejected++;
@@ -77,11 +112,11 @@ public class InventoryTaskExecutor {
         try {
             return task.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
         } catch (TimeoutException exception) {
-            cancel(task);
+            cancel(task, selectedPool);
             expiredRequests.incrementAndGet();
             throw deadlineExceeded();
         } catch (InterruptedException exception) {
-            cancel(task);
+            cancel(task, selectedPool);
             expiredRequests.incrementAndGet();
             Thread.currentThread().interrupt();
             throw deadlineExceeded();
@@ -105,9 +140,9 @@ public class InventoryTaskExecutor {
         }
     }
 
-    private void cancel(FutureTask<?> task) {
+    private void cancel(FutureTask<?> task, ThreadPoolExecutor pool) {
         task.cancel(true);
-        executor.remove(task);
+        pool.remove(task);
     }
 
     static InventoryTaskException deadlineExceeded() {

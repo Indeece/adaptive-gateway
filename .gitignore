@@ -8,6 +8,8 @@ AGENTS.md
 /docs/plan.md
 /docs/decisions.md
 target/
+results/
+__pycache__/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
