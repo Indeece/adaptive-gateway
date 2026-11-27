@@ -1,9 +1,12 @@
 package ru.indeece.gateway.admission;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -18,6 +21,66 @@ import org.junit.jupiter.api.Test;
  * Проверяет допуск, освобождение места и смену лимита.
  */
 class RouteGateTest {
+    @Test
+    void admitsQueuedRequestsInOrderAndRefusesWhenQueueIsFull() throws Exception {
+        RouteGate gate = new RouteGate(1, 2);
+
+        try (var executor = Executors.newFixedThreadPool(3);
+                RoutePermit inProgress = gate.tryAcquire().orElseThrow()) {
+            var firstWaiting = executor.submit(() -> gate.acquire(Duration.ofSeconds(10)).orElseThrow());
+            await().atMost(Duration.ofSeconds(2)).until(() -> gate.queued() == 1);
+            var secondWaiting = executor.submit(() -> gate.acquire(Duration.ofSeconds(10)).orElseThrow());
+            await().atMost(Duration.ofSeconds(2)).until(() -> gate.queued() == 2);
+            var excess = executor.submit(() -> gate.acquire(Duration.ofSeconds(10)));
+
+            assertTrue(excess.get(2, TimeUnit.SECONDS).isEmpty());
+            assertEquals(1, gate.active());
+            assertEquals(2, gate.queued());
+
+            inProgress.close();
+            try (RoutePermit first = firstWaiting.get(2, TimeUnit.SECONDS)) {
+                assertFalse(secondWaiting.isDone());
+                assertEquals(1, gate.active());
+                assertEquals(1, gate.queued());
+            }
+            try (RoutePermit second = secondWaiting.get(2, TimeUnit.SECONDS)) {
+                assertEquals(1, gate.active());
+                assertEquals(0, gate.queued());
+            }
+        }
+        assertEquals(0, gate.active());
+    }
+
+    @Test
+    void expiredWaitLeavesQueueAndDoesNotTakeSlot() throws Exception {
+        RouteGate gate = new RouteGate(1, 1);
+        Duration wait = Duration.ofMillis(50);
+
+        try (RoutePermit inProgress = gate.tryAcquire().orElseThrow()) {
+            long started = System.nanoTime();
+            assertTrue(gate.acquire(wait).isEmpty());
+            assertTrue(System.nanoTime() - started >= wait.toNanos());
+            assertEquals(1, gate.active());
+            assertEquals(0, gate.queued());
+        }
+        assertEquals(0, gate.active());
+    }
+
+    @Test
+    void interruptedWaitFreesQueuePosition() throws Exception {
+        RouteGate gate = new RouteGate(1, 1);
+        try (var executor = Executors.newSingleThreadExecutor();
+                RoutePermit inProgress = gate.tryAcquire().orElseThrow()) {
+            var waiting = executor.submit(() -> gate.acquire(Duration.ofSeconds(10)));
+            await().atMost(Duration.ofSeconds(2)).until(() -> gate.queued() == 1);
+
+            assertTrue(waiting.cancel(true));
+            await().atMost(Duration.ofSeconds(2)).until(() -> gate.queued() == 0);
+            assertEquals(1, gate.active());
+        }
+        assertEquals(0, gate.active());
+    }
+
     @Test
     void simultaneousAcquisitionsDoNotExceedLimit() throws Exception {
         int limit = 3;
@@ -112,13 +175,17 @@ class RouteGateTest {
     }
 
     @Test
-    void admitsAnotherRequestWhenLimitIncreases() {
-        RouteGate gate = new RouteGate(1);
-        try (RoutePermit first = gate.tryAcquire().orElseThrow()) {
+    void raisingLimitWakesQueuedRequestWhileFirstPermitIsStillInUse() throws Exception {
+        RouteGate gate = new RouteGate(1, 1);
+        try (var executor = Executors.newSingleThreadExecutor();
+                RoutePermit first = gate.tryAcquire().orElseThrow()) {
             assertTrue(gate.tryAcquire().isEmpty());
+            var waiting = executor.submit(() -> gate.acquire(Duration.ofSeconds(10)).orElseThrow());
+            await().atMost(Duration.ofSeconds(2)).until(() -> gate.queued() == 1);
             gate.updateLimit(2);
-            try (RoutePermit second = gate.tryAcquire().orElseThrow()) {
+            try (RoutePermit second = waiting.get(2, TimeUnit.SECONDS)) {
                 assertEquals(2, gate.active());
+                assertEquals(0, gate.queued());
                 assertTrue(gate.tryAcquire().isEmpty());
             }
             assertEquals(1, gate.active());

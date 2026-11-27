@@ -28,6 +28,12 @@ observability:
     file: ${SNAPSHOT_FILE:target/snapshots/gateway.jsonl}
     interval: 1s
 
+admission:
+  mode: ${GATEWAY_ADMISSION_MODE:B0}
+  quotes-limit: ${GATEWAY_QUOTES_LIMIT:4}
+  queue-capacity: ${GATEWAY_QUOTES_QUEUE_CAPACITY:8}
+  queue-wait: ${GATEWAY_QUOTES_QUEUE_WAIT:250ms}
+
 upstream:
   connect-timeout: 100ms
   connection-request-timeout: 100ms

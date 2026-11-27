@@ -94,6 +94,18 @@
         {"refId":"A","expr":"sum by (route) (k6_request_starts_total) - sum by (route) (k6_request_completions_total)","legendFormat":"{{route}} · в работе"},
         {"refId":"B","expr":"sum(k6_dropped_iterations_total) or vector(0)","legendFormat":"Пропущенные итерации"}
       ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Занятые слоты и очередь quotes в B1",
+      "datasource": {"type":"prometheus","uid":"prometheus"},
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {"refId":"A","expr":"gateway_quotes_admitted","legendFormat":"Допущены"},
+        {"refId":"B","expr":"gateway_quotes_queued","legendFormat":"Ждут слота"}
+      ]
     }
   ]
 }
