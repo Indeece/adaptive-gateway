@@ -85,8 +85,14 @@ export default function () {
     completions.add(1, tags);
     useful.add(onTime ? 1 : 0, tags);
     if (!onTime) {
-        let outcome = response.status === 200 ? 'late_or_invalid_body' : `http_${response.status}`;
-        if (typeof body?.code === 'string') outcome = body.code;
+        let outcome;
+        if (response.status === 200) {
+            outcome = valid ? 'late_200' : 'invalid_body';
+        } else if (response.status === 0) {
+            outcome = 'client_error';
+        } else {
+            outcome = typeof body?.code === 'string' ? body.code : `http_${response.status}`;
+        }
         errors.add(1, { ...tags, outcome });
     }
 }
