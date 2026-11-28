@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import ru.indeece.gateway.dto.RouteMetricsSnapshot;
+import ru.indeece.gateway.error.QuoteAdmissionException;
 
 /**
  * Учитывает вызовы обоих маршрутов, сохраняя выполнение HTTP-запроса вне блокировок счётчиков.
@@ -30,6 +31,9 @@ public class GatewayMetrics {
             T result = call.get();
             outcome = "success";
             return result;
+        } catch (QuoteAdmissionException exception) {
+            outcome = exception.code();
+            throw exception;
         } catch (RestClientResponseException exception) {
             outcome = "http_" + exception.getStatusCode().value();
             throw exception;

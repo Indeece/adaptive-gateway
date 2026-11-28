@@ -1,14 +1,15 @@
 package ru.indeece.gateway.error;
 
-import org.apache.hc.core5.http.ConnectionRequestTimeoutException;
-import org.springframework.web.server.ResponseStatusException;
 import java.net.SocketTimeoutException;
+import org.apache.hc.core5.http.ConnectionRequestTimeoutException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import ru.indeece.gateway.dto.ErrorResponse;
 
 /**
@@ -16,6 +17,12 @@ import ru.indeece.gateway.dto.ErrorResponse;
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(QuoteAdmissionException.class)
+    ResponseEntity<ErrorResponse> handleQuoteAdmission(QuoteAdmissionException error) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse(error.code(), error.getMessage()));
+    }
 
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<ErrorResponse> handleUnknownSku(ResponseStatusException error) {

@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -13,6 +15,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
+import ru.indeece.gateway.admission.QuoteAdmission;
+import ru.indeece.gateway.config.AdmissionMode;
+import ru.indeece.gateway.config.QuoteAdmissionProperties;
+import ru.indeece.gateway.error.QuoteAdmissionException;
 
 /**
  * Проверяет согласованность учёта маршрутов при параллельных вызовах и ошибках.
@@ -59,6 +65,28 @@ class GatewayMetricsTest {
             assertEquals(route.completed(), route.outcomes().get("success"));
             assertTrue(route.totalDurationMs() >= route.maxDurationMs());
         }
+    }
+
+    @Test
+    void interruptedAdmissionIsCountedSeparatelyFromOverload() {
+        GatewayMetrics metrics = new GatewayMetrics();
+        var settings = new QuoteAdmissionProperties(AdmissionMode.B1, 1, 1, Duration.ofSeconds(1));
+        QuoteAdmission admission = new QuoteAdmission(settings);
+
+        Thread.currentThread().interrupt();
+        try {
+            var error = assertThrows(QuoteAdmissionException.class, () ->
+                    metrics.measure(GatewayRoute.QUOTES, () -> admission.execute(() -> {
+                        throw new AssertionError("Checkout received an interrupted request");
+                    })));
+            assertEquals("gateway_interrupted", error.code());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+        var snapshot = metrics.snapshot().get(GatewayRoute.QUOTES);
+        assertEquals(Map.of("gateway_interrupted", 1L), snapshot.outcomes());
+        assertEquals(0, snapshot.active());
     }
 
     @Test

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import ru.indeece.gateway.admission.QuoteAdmission;
 import ru.indeece.gateway.dto.AvailabilityResponse;
 import ru.indeece.gateway.dto.QuoteResponse;
 import ru.indeece.gateway.monitoring.GatewayMetrics;
@@ -19,13 +20,16 @@ public class GatewayController {
     private final RestClient inventoryClient;
     private final RestClient checkoutClient;
     private final GatewayMetrics metrics;
+    private final QuoteAdmission quoteAdmission;
 
     public GatewayController(@Qualifier("inventoryClient") RestClient inventoryClient,
                              @Qualifier("checkoutClient") RestClient checkoutClient,
-                             GatewayMetrics metrics) {
+                             GatewayMetrics metrics,
+                             QuoteAdmission quoteAdmission) {
         this.inventoryClient = inventoryClient;
         this.checkoutClient = checkoutClient;
         this.metrics = metrics;
+        this.quoteAdmission = quoteAdmission;
     }
 
     @GetMapping("/availability/{sku}")
@@ -46,7 +50,7 @@ public class GatewayController {
 
     @GetMapping("/quotes/{sku}")
     public QuoteResponse getQuote(@PathVariable String sku) {
-        return metrics.measure(GatewayRoute.QUOTES, () -> requestQuote(sku));
+        return metrics.measure(GatewayRoute.QUOTES, () -> quoteAdmission.execute(() -> requestQuote(sku)));
     }
 
     private QuoteResponse requestQuote(String sku) {
